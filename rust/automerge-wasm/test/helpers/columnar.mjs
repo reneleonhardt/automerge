@@ -1,4 +1,4 @@
-import pako from 'pako'
+import * as pako from 'pako'
 import { copyObject, parseOpId, equalBytes } from './common.mjs'
 import {
   utf8ToString, hexStringToBytes, bytesToHexString,
