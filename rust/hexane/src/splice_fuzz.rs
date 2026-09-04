@@ -3,14 +3,14 @@
 //!
 //! # Why this exists
 //!
-//! A `Column<bool>` splice once duplicated the run at a slab boundary,
-//! inserting more items than it was given. Every fuzzer in the crate
+//! A `Column<bool>` splice once duplicated a run at a slab boundary,
+//! inserting more items than it received. Every fuzzer in the crate
 //! missed it, and the reasons are worth keeping written down — they are
 //! what this harness is built around.
 //!
 //! 1. **Self-consistency is not correctness.** [`validate_column`] checks
 //!    `total_len == Σ slab.len` and that each slab's metadata matches its
-//!    own bytes. A slab holding a duplicated run satisfies all of that: it
+//!    own bytes. A slab containing a duplicated run satisfies all of that: it
 //!    honestly contains the extra items and the totals add up. Only an
 //!    independent model notices. So every step here compares against a
 //!    `Vec`.
@@ -156,7 +156,7 @@ fn gen_op<T: FuzzTarget>(
         1 => remaining.min(1),
         2 => remaining.min(rng.random_range(0..max_seg * 2 + 2)),
         3 => remaining.min(rng.random_range(0..16)),
-        // whole-slab and slab-spanning deletes
+        // Whole-slab and slab-spanning deletes.
         4 => {
             let target = bounds.iter().copied().find(|b| *b > pos).unwrap_or(len);
             (target - pos).min(remaining)
@@ -557,27 +557,21 @@ impl FuzzTarget for PrefixColumn<bool> {
 const BUDGETS: &[usize] = &[2, 3, 4, 8, 16, 64];
 
 macro_rules! fuzz_tests {
-    ($($fast:ident, $slow:ident, $ty:ty;)*) => {
+    ($($fast:ident, $ty:ty;)*) => {
         $(
             #[test]
             fn $fast() {
                 run::<$ty>(12, 40, BUDGETS);
-            }
-
-            #[test]
-            #[ignore]
-            fn $slow() {
-                run::<$ty>(200, 120, BUDGETS);
             }
         )*
     };
 }
 
 fuzz_tests! {
-    splice_fuzz_bool, splice_fuzz_bool_long, Column<bool>;
-    splice_fuzz_u64, splice_fuzz_u64_long, Column<u64>;
-    splice_fuzz_option_u64, splice_fuzz_option_u64_long, Column<Option<u64>>;
-    splice_fuzz_option_string, splice_fuzz_option_string_long, Column<Option<String>>;
-    splice_fuzz_delta_i64, splice_fuzz_delta_i64_long, DeltaColumn<i64>;
-    splice_fuzz_prefix_bool, splice_fuzz_prefix_bool_long, PrefixColumn<bool>;
+    splice_fuzz_bool, Column<bool>;
+    splice_fuzz_u64, Column<u64>;
+    splice_fuzz_option_u64, Column<Option<u64>>;
+    splice_fuzz_option_string, Column<Option<String>>;
+    splice_fuzz_delta_i64, DeltaColumn<i64>;
+    splice_fuzz_prefix_bool, PrefixColumn<bool>;
 }

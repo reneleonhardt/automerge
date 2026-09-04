@@ -944,9 +944,10 @@ impl<T: DeltaValue, C: Codec> DeltaColumn<T, C> {
         self.splice_items_inner(
             index,
             del,
-            runs.into_iter()
-                .filter(|r| r.count > 0)
-                .map(SpliceItem::Run),
+            runs.into_iter().filter(|r| r.count > 0).map(|run| {
+                validate_delta_run::<T>(run);
+                SpliceItem::Run(run)
+            }),
         );
     }
 
@@ -1295,6 +1296,7 @@ where
             if run.count == 0 {
                 continue;
             }
+            validate_delta_run::<T>(run);
             let Some(d) = run.delta else {
                 // a null run holds no delta and leaves the running value
                 // where it is
@@ -1451,6 +1453,26 @@ pub struct DeltaRun {
     /// The per-item delta; `None` is a run of nulls.
     pub delta: Option<i64>,
     pub count: usize,
+}
+
+fn validate_delta_run<T: DeltaValue>(run: DeltaRun) {
+    let Some(delta) = run.delta else {
+        assert!(T::NULLABLE, "null run in a non-nullable delta column");
+        return;
+    };
+    let count = i64::try_from(run.count).expect("delta run count must fit in i64");
+    let first = run
+        .prefix
+        .checked_add(delta)
+        .expect("delta run overflows i64");
+    let last = run
+        .prefix
+        .checked_add(delta.checked_mul(count).expect("delta run overflows i64"))
+        .expect("delta run overflows i64");
+    assert!(
+        first.min(last) >= T::MIN_I64 && first.max(last) <= T::MAX_I64,
+        "delta run contains a value outside the column domain"
+    );
 }
 
 // ── DeltaIter ──────────────────────────────────────────────────────────────

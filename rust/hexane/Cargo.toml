@@ -15,8 +15,6 @@ bench = false
 [features]
 wasm = ["web-sys"]
 slow_path_assertions = []
-# Deep/expensive fuzz tests, skipped by default so `cargo test` stays fast.
-deep_fuzz = []
 bijou64 = ["dep:bijoux"]
 
 

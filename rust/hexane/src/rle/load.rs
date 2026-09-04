@@ -107,6 +107,20 @@ struct CutState {
 }
 
 impl CutState {
+    fn add_segment(&mut self, count: usize) -> Result<(), PackError> {
+        self.slab.len = self
+            .slab
+            .len
+            .checked_add(count)
+            .ok_or_else(|| PackError::InvalidValue("RLE item count overflow".into()))?;
+        self.slab.segments = self
+            .slab
+            .segments
+            .checked_add(1)
+            .ok_or_else(|| PackError::InvalidValue("RLE segment count overflow".into()))?;
+        Ok(())
+    }
+
     /// Per-segment slab bookkeeping; yields the segment's run, if any.
     /// `#[inline(always)]` so a caller that discards the run compiles down
     /// to the bare bookkeeping. Callers run `validate_after` (which
@@ -117,7 +131,7 @@ impl CutState {
     fn track<'a, T: RleValue>(
         &mut self,
         segment: RleSegment<'a, T>,
-    ) -> Option<crate::Run<T::Get<'a>>> {
+    ) -> Result<Option<crate::Run<T::Get<'a>>>, PackError> {
         match segment {
             RleSegment::LitHead { count, bytes } => {
                 if self.last_lit_count < self.lit_count {
@@ -126,36 +140,36 @@ impl CutState {
                 self.slab.tail.bytes = bytes as u32;
                 self.last_lit_count = count;
                 self.lit_count = 0;
-                None
+                Ok(None)
             }
             RleSegment::Lit { value, bytes } => {
-                self.slab.len += 1;
-                self.slab.segments += 1;
+                self.add_segment(1)?;
                 self.slab.tail.lit_tail = NonZeroU32::new(bytes as u32);
                 self.slab.tail.bytes += bytes as u32;
-                self.lit_count += 1;
-                Some(crate::Run { count: 1, value })
+                self.lit_count = self
+                    .lit_count
+                    .checked_add(1)
+                    .ok_or_else(|| PackError::InvalidValue("RLE literal count overflow".into()))?;
+                Ok(Some(crate::Run { count: 1, value }))
             }
             RleSegment::Run {
                 count,
                 value,
                 bytes,
             } => {
-                self.slab.len += count;
-                self.slab.segments += 1;
+                self.add_segment(count)?;
                 self.slab.tail.lit_tail = None;
                 self.slab.tail.bytes = bytes as u32;
-                (count > 0).then_some(crate::Run { count, value })
+                Ok((count > 0).then_some(crate::Run { count, value }))
             }
             RleSegment::Null { count, bytes } => {
-                self.slab.len += count;
-                self.slab.segments += 1;
+                self.add_segment(count)?;
                 self.slab.tail.lit_tail = None;
                 self.slab.tail.bytes = bytes as u32;
-                (count > 0).then_some(crate::Run {
+                Ok((count > 0).then_some(crate::Run {
                     count,
                     value: T::get_null(),
-                })
+                }))
             }
         }
     }
@@ -216,7 +230,7 @@ impl<'a, T: RleValue, C: Codec> RleLoadIter<'a, T, C> {
                 }
                 _ => self.prev = Some(segment),
             }
-            let out = self.cut.track::<T>(segment);
+            let out = self.cut.track::<T>(segment)?;
             if self.cut.slab.segments == self.target_segments {
                 self.cut.cut_slab::<C>(self.input, self.decoder.pos());
             }
@@ -251,7 +265,7 @@ impl<'a, T: RleValue, C: Codec> RleLoadIter<'a, T, C> {
                 }
                 _ => prev = Some(segment),
             }
-            let _ = cut.track::<T>(segment);
+            let _ = cut.track::<T>(segment)?;
             if cut.slab.segments == target_segments {
                 cut.cut_slab::<C>(input, decoder.pos());
             }

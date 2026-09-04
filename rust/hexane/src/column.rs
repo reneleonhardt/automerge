@@ -409,6 +409,10 @@ impl<'a, T: ColumnValueRef, C: Codec> Iterator for Iter<'a, T, C> {
 
     /// O(log S + runs_skipped) — uses the column's index for slab lookup.
     fn nth(&mut self, n: usize) -> Option<T::Get<'a>> {
+        if self.col.is_none() {
+            self.items_left = 0;
+            return None;
+        }
         if n >= self.items_left {
             if self.items_left > 0 {
                 self.nth(self.items_left - 1);
@@ -790,6 +794,7 @@ impl<'a, T: ColumnValueRef, C: Codec> Iterator for Runs<'a, T, C> {
 ///
 /// Created by [`Iter::suspend`] and restored by [`IterState::try_resume`].
 pub struct IterState {
+    column_id: usize,
     counter: usize,
     num_slabs: usize,
     slab_idx: usize,
@@ -814,6 +819,10 @@ impl IterState {
         WF: WeightFn<T, C>,
         Idx: ColumnIndex<WF::Weight>,
     {
+        let column_id = std::ptr::from_ref(column).cast::<()>() as usize;
+        if self.column_id != column_id {
+            return Err(PackError::InvalidResume);
+        }
         if self.counter != column.counter {
             return Err(PackError::InvalidResume);
         }
@@ -861,6 +870,10 @@ impl<'a, T: ColumnValueRef, C: Codec> Iter<'a, T, C> {
             0
         };
         IterState {
+            column_id: self
+                .col
+                .map(|col| (col as *const dyn ColumnRef<T>).cast::<()>() as usize)
+                .unwrap_or(0),
             counter: self.counter,
             num_slabs: self.slabs.len(),
             slab_idx: self.slab_idx,
@@ -1926,6 +1939,11 @@ where
             if len == 0 {
                 return Ok(Column::with_max_segments(self.max_segments));
             }
+            if WF::ACCUMULATES {
+                let mut weight = WF::Weight::default();
+                WF::accumulate_run(&mut weight, len, value)?;
+                check(&weight)?;
+            }
             return Ok(Column::fill(len, value));
         }
         if WF::ACCUMULATES {
@@ -2536,6 +2554,13 @@ mod merge_skeleton {
 #[cfg(test)]
 mod edit_small {
     use super::*;
+
+    #[test]
+    fn default_iter_stays_empty_when_repositioned() {
+        let mut iter = Iter::<u64>::default();
+        assert_eq!(iter.nth(2), None);
+        assert_eq!(iter.items_left, 0);
+    }
 
     /// Exhaustive over small scripts — cheap, and it is what caught the
     /// end-of-column reposition bug (a delete, then a seek to the end,

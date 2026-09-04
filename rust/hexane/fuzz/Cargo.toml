@@ -1,0 +1,25 @@
+[package]
+name = "hexane-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+hexane = { path = ".." }
+libfuzzer-sys = "0.4"
+
+# Keep this cargo-fuzz package outside the parent workspace.
+[workspace]
+members = ["."]
+
+[profile.release]
+debug = 1
+
+[[bin]]
+name = "public_api"
+path = "fuzz_targets/public_api.rs"
+test = false
+doc = false

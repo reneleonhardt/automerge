@@ -2,9 +2,8 @@
 //!
 //! The cursor rewrites slab bytes in place across an open-ended sequence
 //! of edits, so a bug here is silent data corruption rather than a panic:
-//! the column still iterates, it just holds the wrong thing, or holds the
-//! right thing in a shape nothing else in the crate can parse. Three
-//! oracles, in increasing strength:
+//! the column still iterates, but holds the wrong value or a shape that nothing
+//! else in the crate can parse. It uses three oracles, in increasing strength:
 //!
 //! 1. **Values** — the edited column against a `Vec` model that mirrors
 //!    the cursor's contract exactly (see [`Model`]).
@@ -17,18 +16,11 @@
 //!    should have merged, or a literal group whose header count is off by
 //!    one all fail here and nowhere else.
 //!
-//! The fast tests run in the normal suite. The exhaustive ones are
-//! `#[ignore]`d and run with
-//!
-//! ```text
-//! RUSTFLAGS="-C debug-assertions" cargo test -p hexane --release -- --ignored --nocapture
-//! ```
-//!
-//! which is the combination that matters: optimized enough to run
-//! millions of edits, with the in-rebuild slab validation still live.
+//! The deep public-API fuzzing lives in `hexane/fuzz`, so the normal library
+//! test target stays focused on fast regression coverage.
 
 use crate::column::Column;
-use crate::{AsColumnRef, ColumnValueRef, Run};
+use crate::{ColumnValueRef, Run};
 use std::fmt::Debug;
 
 /// xorshift64* — reproducible without a dev-dependency.
@@ -36,7 +28,7 @@ pub(crate) struct Rng(u64);
 
 impl Rng {
     fn new(seed: u64) -> Self {
-        // splitmix so neighbouring seeds do not produce correlated runs
+        // SplitMix prevents neighbouring seeds from producing correlated runs.
         let mut z = seed.wrapping_add(0x9E37_79B9_7F4A_7C15);
         z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
         z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
@@ -127,7 +119,6 @@ impl<T: Clone + PartialEq + Debug> Model<T> {
 fn verify<T>(col: &Column<T>, want: &[T], max_seg: usize, ctx: &dyn Fn() -> String)
 where
     T: ColumnValueRef + Clone + PartialEq + Debug,
-    for<'x> T::Get<'x>: AsColumnRef<T> + PartialEq + Debug,
 {
     col.check_invariants();
     let got: Vec<T> = col.iter().map(T::to_owned).collect();
@@ -290,7 +281,6 @@ fn run_script<T>(
     tag: &str,
 ) where
     T: ColumnValueRef + Clone + PartialEq + Debug,
-    for<'x> T::Get<'x>: AsColumnRef<T> + PartialEq + Debug,
 {
     let mut model = Model::new(vals);
     for (b, batch) in batches.iter().enumerate() {
@@ -373,7 +363,6 @@ fn run_script<T>(
 fn fuzz_one<T, F>(seed: u64, max_seg: usize, len: usize, make: &F, ops: usize)
 where
     T: ColumnValueRef + Clone + PartialEq + Debug,
-    for<'x> T::Get<'x>: AsColumnRef<T> + PartialEq + Debug,
     F: Fn(&mut Rng) -> T,
 {
     let mut rng = Rng::new(seed);
@@ -487,20 +476,6 @@ fn opt_str(r: &mut Rng) -> Option<String> {
 
 /// Budgets small enough that nearly every edit spills, merges, or both.
 const TIGHT: [usize; 4] = [2, 3, 4, 5];
-
-#[test]
-#[cfg_attr(
-    not(feature = "deep_fuzz"),
-    ignore = "deep fuzz: run with --features deep_fuzz"
-)]
-fn random_scripts_u64() {
-    for seed in 0..400u64 {
-        for max_seg in TIGHT {
-            fuzz_one::<u64, _>(seed, max_seg, 40, &small_u64, 40);
-        }
-        fuzz_one::<u64, _>(seed, 64, 300, &wide_u64, 60);
-    }
-}
 
 /// Booleans: a slab is a handful of run counts, so the cursor rebuilds
 /// it whole rather than splicing bytes into it — a different enough shape
@@ -689,94 +664,6 @@ fn degenerate_columns() {
                         verify(&col, &want, max_seg, &|| {
                             format!("len={len} max_seg={max_seg} at={at} del={del} ins={ins}")
                         });
-                    }
-                }
-            }
-        }
-    }
-}
-
-// ── the long runs ───────────────────────────────────────────────────────────
-
-/// Hours of scripts across every shape, alphabet and budget.
-#[test]
-#[ignore = "deep fuzz: run explicitly"]
-fn deep_random() {
-    let iters: u64 = std::env::var("HEXANE_FUZZ_ITERS")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(20_000);
-    for seed in 0..iters {
-        // sampled rather than cycled, so budget, length and shape vary
-        // independently instead of marching in lockstep
-        let mut pick = Rng::new(seed ^ 0xD1CE);
-        let max_seg = [2usize, 3, 4, 5, 8, 13, 17, 64][pick.below(8)];
-        let len = [0usize, 1, 2, 3, 7, 33, 64, 65, 129, 400, 900][pick.below(11)];
-        let ops = 5 + pick.below(80);
-        // the failing assertion is often inside the column's own
-        // invariant check, which knows nothing about the script — so name
-        // the seed here, where it is known
-        let r = std::panic::catch_unwind(|| match seed % 5 {
-            0 => fuzz_one::<u64, _>(seed, max_seg, len, &small_u64, ops),
-            1 => fuzz_one::<u64, _>(seed, max_seg, len, &wide_u64, ops),
-            2 => fuzz_one::<Option<u64>, _>(seed, max_seg, len, &opt_u64, ops),
-            3 => fuzz_one::<bool, _>(seed, max_seg, len, &|r| r.below(3) == 0, ops),
-            _ => fuzz_one::<Option<String>, _>(seed, max_seg, len, &opt_str, ops),
-        });
-        if r.is_err() {
-            panic!("deep_random failed at seed={seed} max_seg={max_seg} len={len} ops={ops}");
-        }
-        if seed % 2_000 == 0 {
-            println!("deep_random: {seed}/{iters}");
-        }
-    }
-}
-
-/// The tiny exhaustive space, widened: longer columns, a three-value
-/// alphabet, and two edits per script instead of one.
-#[test]
-#[ignore = "deep fuzz: run explicitly"]
-fn exhaustive_two_edits() {
-    for len in 0..=5usize {
-        for bits in 0..3u32.pow(len as u32) {
-            let vals: Vec<u64> = (0..len)
-                .map(|i| (bits / 3u32.pow(i as u32) % 3) as u64)
-                .collect();
-            for max_seg in [2usize, 3, 4] {
-                for p0 in 0..=len {
-                    for d0 in 0..=(len - p0) {
-                        for i0 in 0..=2usize {
-                            for p1 in (p0 + d0)..=len {
-                                for d1 in 0..=(len - p1) {
-                                    for i1 in 0..=2usize {
-                                        let mut col = Column::<u64>::from_values_with_max_segments(
-                                            vals.clone(),
-                                            max_seg,
-                                        );
-                                        let mut m = Model::new(vals.clone());
-                                        {
-                                            let mut e = col.edit();
-                                            e.seek(p0).delete(d0).insert_run(7u64, i0);
-                                            e.seek(p1).delete(d1).insert_run(8u64, i1);
-                                            m.seek(p0);
-                                            m.delete(d0);
-                                            m.insert(7, i0);
-                                            m.seek(p1);
-                                            m.delete(d1);
-                                            m.insert(8, i1);
-                                            e.finish();
-                                        }
-                                        let want = m.values();
-                                        verify(&col, &want, max_seg, &|| {
-                                            format!(
-                                                "vals={vals:?} max_seg={max_seg} \
-                                                 p0={p0} d0={d0} i0={i0} p1={p1} d1={d1} i1={i1}"
-                                            )
-                                        });
-                                    }
-                                }
-                            }
-                        }
                     }
                 }
             }
@@ -1104,74 +991,6 @@ mod delta {
                 e.finish();
             }
             assert_eq!(col.save(), before, "a read-only delta cursor wrote");
-        }
-    }
-
-    /// The deep run, alongside the plain cursor's.
-    #[test]
-    #[ignore = "deep fuzz: run explicitly"]
-    fn deep_random() {
-        let iters: u64 = std::env::var("HEXANE_FUZZ_ITERS")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(20_000);
-        for seed in 0..iters {
-            let mut pick = Rng::new(seed ^ 0xDE17A);
-            let max_seg = [2usize, 3, 4, 5, 8, 13, 64][pick.below(7)];
-            let len = [0usize, 1, 2, 3, 7, 33, 64, 65, 129, 400][pick.below(10)];
-            let edits = 1 + pick.below(12);
-            let r = std::panic::catch_unwind(|| match seed % 3 {
-                0 => one(seed, max_seg, len, edits, &plain),
-                1 => one(seed, max_seg, len, edits, &unsigned),
-                _ => one(seed, max_seg, len, edits, &nullable),
-            });
-            if r.is_err() {
-                panic!("delta deep_random failed at seed={seed} max_seg={max_seg} len={len}");
-            }
-            if seed % 2_000 == 0 {
-                println!("delta deep_random: {seed}/{iters}");
-            }
-        }
-    }
-}
-
-/// Every small boolean column against every small edit — the space where
-/// an off-by-one in run splitting or parity has nowhere to hide.
-#[test]
-#[cfg_attr(
-    not(feature = "deep_fuzz"),
-    ignore = "deep fuzz: run with --features deep_fuzz"
-)]
-fn exhaustive_tiny_bool() {
-    for len in 0..=7usize {
-        for bits in 0..(1u32 << len) {
-            let vals: Vec<bool> = (0..len).map(|i| (bits >> i) & 1 == 1).collect();
-            for max_seg in [2usize, 3, 64] {
-                for pos in 0..=len {
-                    for del in 0..=(len - pos) {
-                        for ins in 0..=2usize {
-                            for v in [false, true] {
-                                let mut col = Column::<bool>::from_values_with_max_segments(
-                                    vals.clone(),
-                                    max_seg,
-                                );
-                                let mut m = Model::new(vals.clone());
-                                {
-                                    let mut e = col.edit();
-                                    e.seek(pos).delete(del).insert_run(v, ins);
-                                    m.seek(pos);
-                                    m.delete(del);
-                                    m.insert(v, ins);
-                                    e.finish();
-                                }
-                                verify(&col, &m.values(), max_seg, &|| {
-                                    format!("vals={vals:?} max_seg={max_seg} pos={pos} del={del} ins={ins} v={v}")
-                                });
-                            }
-                        }
-                    }
-                }
-            }
         }
     }
 }

@@ -15,7 +15,7 @@ use std::ops::Range;
 
 use crate::btree::{FindByValueRange, SlabAgg};
 use crate::column::{Slab, TailOf, WeightFn};
-use crate::delta::{DeltaColumn, DeltaInner, DeltaValue};
+use crate::delta::{DeltaColumn, DeltaInner, DeltaIter, DeltaValue};
 use crate::encoding::{ColumnEncoding, RunDecoder};
 use crate::ColumnValueRef;
 use crate::{Codec, Leb128};
@@ -149,7 +149,11 @@ impl<T: DeltaValue, C: Codec> DeltaColumn<T, C> {
     /// empty — matching [`find_by_range`](Self::find_by_range)'s
     /// behaviour for unrepresentable bounds.
     pub fn find_by_value(&self, target: T) -> FindByRange<'_, T, C> {
+        if T::NULLABLE && target == T::null_value() {
+            return FindByRange::nulls(self);
+        }
         match target.try_to_i64() {
+            Some(i64::MAX) => FindByRange::exact(self, target),
             Some(v) => self.find_by_range(v..v + 1),
             None => self.find_by_range(0i64..0i64),
         }
@@ -185,6 +189,8 @@ pub struct FindByRange<'a, T: DeltaValue, C: Codec = Leb128> {
     slabs: &'a [Slab<TailOf<T::Inner, C>>],
     outer: Option<FindByValueRange<'a>>,
     current: Option<SlabScan<'a, C>>,
+    nulls: Option<DeltaIter<'a, T, C>>,
+    exact: Option<(DeltaIter<'a, T, C>, T)>,
 }
 
 impl<T: DeltaValue, C: Codec> Default for FindByRange<'_, T, C> {
@@ -195,6 +201,8 @@ impl<T: DeltaValue, C: Codec> Default for FindByRange<'_, T, C> {
             slabs: &[],
             outer: None,
             current: None,
+            nulls: None,
+            exact: None,
         }
     }
 }
@@ -210,9 +218,26 @@ impl<'a, T: DeltaValue, C: Codec> FindByRange<'a, T, C> {
                 slabs: &col.col.slabs,
                 outer: Some(col.col.find_by_value_range(lo, hi - 1)),
                 current: None,
+                nulls: None,
+                exact: None,
             }
         } else {
             Self::default()
+        }
+    }
+
+    fn nulls(col: &'a DeltaColumn<T, C>) -> Self {
+        Self {
+            slabs: &col.col.slabs,
+            nulls: Some(col.iter()),
+            ..Self::default()
+        }
+    }
+
+    fn exact(col: &'a DeltaColumn<T, C>, target: T) -> Self {
+        Self {
+            exact: Some((col.iter(), target)),
+            ..Self::default()
         }
     }
 }
@@ -220,6 +245,12 @@ impl<'a, T: DeltaValue, C: Codec> FindByRange<'a, T, C> {
 impl<T: DeltaValue, C: Codec> Iterator for FindByRange<'_, T, C> {
     type Item = usize;
     fn next(&mut self) -> Option<usize> {
+        if let Some((iter, target)) = self.exact.as_mut() {
+            return iter.scan_to_value(*target);
+        }
+        if let Some(iter) = self.nulls.as_mut() {
+            return iter.scan_to_value(T::null_value());
+        }
         loop {
             if let Some(scan) = self.current.as_mut() {
                 if let Some(i) = scan.next() {
@@ -452,12 +483,19 @@ mod tests {
     fn nullable_values() {
         let vals = vec![Some(10i64), None, Some(20), None, None, Some(15)];
         let col = DeltaColumn::<Option<i64>>::from_values(vals.clone());
+        assert_eq!(col.find_by_value(None).collect::<Vec<_>>(), vec![1, 3, 4]);
         assert_eq!(col.find_first(Some(10)), Some(0));
         assert_eq!(col.find_first(Some(20)), Some(2));
         assert_eq!(col.find_first(Some(15)), Some(5));
         assert_eq!(col.find_first(Some(999)), None);
         let iter_vals: Vec<Option<i64>> = col.iter().collect();
         assert_eq!(iter_vals, vals);
+    }
+
+    #[test]
+    fn find_by_value_handles_i64_max() {
+        let col = DeltaColumn::<i64>::from_values(vec![i64::MAX, 0, i64::MAX]);
+        assert_eq!(col.find_by_value(i64::MAX).collect::<Vec<_>>(), vec![0, 2]);
     }
 
     fn reference_find(values: &[u64], target: u64) -> Vec<usize> {

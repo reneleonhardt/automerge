@@ -4,5 +4,7 @@ perf.*
 build/
 .vim/*
 /target
+/rust/hexane/fuzz/Cargo.lock
+/rust/hexane/fuzz/target/
 .DS_Store
 CLAUDE.md

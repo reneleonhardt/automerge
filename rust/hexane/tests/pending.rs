@@ -1,10 +1,10 @@
-//! Known bugs with no fix yet.
+//! Regression tests for formerly known bugs.
 //!
-//! Each test here fails, and each names one defect. They are `#[ignore]`d
-//! so CI stays green; run them with
+//! Each test names one defect that must remain fixed. Run the complete file
+//! with
 //!
 //! ```text
-//! cargo test -p hexane --test pending -- --ignored
+//! cargo test -p hexane --test pending
 //! ```
 //!
 //! Drop the attribute as each fix lands. A test that starts passing means
@@ -22,7 +22,6 @@ use hexane::{Column, DeltaColumn, DeltaRun, Iter, LoadOpts};
 /// have different layouts, so the columns here are deliberately the same
 /// shape.
 #[test]
-#[ignore = "known bug: resume does not check column identity"]
 fn resume_rejects_a_foreign_column() {
     let a = Column::<u64>::from_values_with_max_segments((0..200u64).collect(), 2);
     let b = Column::<u64>::from_values_with_max_segments((1000..1200u64).collect(), 2);
@@ -48,7 +47,6 @@ fn resume_rejects_a_foreign_column() {
 /// `find_by_value(None)` answers "no matches" for a column full of them
 /// — disagreeing with `scan_to_value`, which finds them.
 #[test]
-#[ignore = "known bug: find_by_value cannot see nulls"]
 fn find_by_value_finds_nulls() {
     let col = DeltaColumn::<Option<u32>>::from_values(vec![None, None, Some(1), Some(3)]);
     assert_eq!(col.iter().scan_to_value(None), Some(0), "scan finds them");
@@ -59,7 +57,6 @@ fn find_by_value_finds_nulls() {
 /// silently writes a column the other's `load` refuses. `insert_runs`
 /// panics on this run; `splice_runs` accepts it.
 #[test]
-#[ignore = "known bug: splice_runs skips the domain check insert_runs makes"]
 fn splice_runs_enforces_the_domain_like_insert_runs() {
     let run = DeltaRun {
         prefix: 0,
@@ -82,7 +79,6 @@ fn splice_runs_enforces_the_domain_like_insert_runs() {
 /// bytes that are not there. `load` must reject rather than panic (debug)
 /// or hand back a nonsense length (release).
 #[test]
-#[ignore = "known bug: the RLE loader sums untrusted counts unchecked"]
 fn rle_load_rejects_a_wrapped_length() {
     fn sleb(mut v: i64, out: &mut Vec<u8>) {
         loop {
@@ -114,7 +110,6 @@ fn rle_load_rejects_a_wrapped_length() {
 /// derives `Default` around one and calls `shift_next` on it — so
 /// repositioning a column-less iterator must yield nothing, not panic.
 #[test]
-#[ignore = "known bug: a default Iter panics on any repositioning call"]
 fn a_default_iter_repositions_without_panicking() {
     let r = std::panic::catch_unwind(|| {
         let mut it = Iter::<u64>::default();
@@ -135,7 +130,6 @@ fn a_default_iter_repositions_without_panicking() {
 /// the value domain must be an error — not a column that cannot be read
 /// back.
 #[test]
-#[ignore = "known bug: load_with's fill escapes domain validation"]
 fn load_with_rejects_an_out_of_domain_fill() {
     let c = DeltaColumn::<u32>::load_with(&[], LoadOpts::new().with_length(3).with_fill(-5i64));
     match c {
