@@ -165,7 +165,27 @@ impl MessageVersion {
 
 impl SyncDoc for Automerge {
     fn generate_sync_message(&self, sync_state: &mut State) -> Option<Message> {
-        let our_heads = self.get_heads();
+        let our_heads = self.heads();
+
+        if let Some(ref their_have) = sync_state.their_have {
+            if let Some(first_have) = their_have.first().as_ref() {
+                if !first_have
+                    .last_sync
+                    .iter()
+                    .all(|hash| self.has_change(hash))
+                {
+                    return Some(Message::reset(our_heads.to_vec()));
+                }
+            }
+        }
+
+        if sync_state.have_responded
+            && sync_state.in_flight
+            && !sync_state.needs_reset
+            && sync_state.last_sent_heads.as_slice() == our_heads
+        {
+            return None;
+        }
 
         let our_need = if sync_state.read_only {
             vec![]
@@ -192,18 +212,6 @@ impl SyncDoc for Automerge {
         } else {
             Vec::new()
         };
-
-        if let Some(ref their_have) = sync_state.their_have {
-            if let Some(first_have) = their_have.first().as_ref() {
-                if !first_have
-                    .last_sync
-                    .iter()
-                    .all(|hash| self.has_change(hash))
-                {
-                    return Some(Message::reset(our_heads));
-                }
-            }
-        }
 
         let message_builder = if sync_state.is_peer_read_only() {
             // The remote peer is read-only and will ignore incoming changes.
@@ -235,9 +243,9 @@ impl SyncDoc for Automerge {
             MessageBuilder::new(vec![], sync_state)
         };
 
-        let heads_unchanged = sync_state.last_sent_heads == our_heads;
+        let heads_unchanged = sync_state.last_sent_heads.as_slice() == our_heads;
 
-        let heads_equal = sync_state.their_heads.as_ref() == Some(&our_heads);
+        let heads_equal = sync_state.their_heads.as_deref() == Some(our_heads);
 
         if heads_unchanged && sync_state.have_responded {
             if (heads_equal || sync_state.read_only) && message_builder.is_empty() {
@@ -249,7 +257,8 @@ impl SyncDoc for Automerge {
         }
 
         sync_state.have_responded = true;
-        sync_state.last_sent_heads.clone_from(&our_heads);
+        sync_state.last_sent_heads.clear();
+        sync_state.last_sent_heads.extend_from_slice(our_heads);
         sync_state.sent_hashes.extend(message_builder.hashes());
 
         let mut flags = MessageFlags::new();
@@ -268,12 +277,12 @@ impl SyncDoc for Automerge {
             sync_state.needs_reset = false;
             if sync_state.peer_supports_sync_reset() {
                 flags.set(MessageFlags::SYNC_RESET);
-                our_heads.clone()
+                our_heads.to_vec()
             } else {
                 vec![]
             }
         } else {
-            our_heads.clone()
+            our_heads.to_vec()
         };
 
         let sync_message = message_builder

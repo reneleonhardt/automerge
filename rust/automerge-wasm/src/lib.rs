@@ -1305,7 +1305,8 @@ impl Automerge {
     }
 
     pub fn save(&mut self) -> Uint8Array {
-        Uint8Array::from(self.doc.save().as_slice())
+        // The JS-owned result still requires one copy, but avoid a temporary Rust Vec.
+        Uint8Array::from(self.doc.save_bytes())
     }
 
     #[wasm_bindgen(js_name = saveIncremental)]

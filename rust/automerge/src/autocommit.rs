@@ -527,8 +527,22 @@ impl AutoCommit {
     }
 
     /// Save the entirety of this document in a compact form.
+    ///
+    /// The returned slice is cached and remains valid while this document is mutably borrowed.
+    /// Use [`Self::save`] when an owned buffer is required.
+    pub fn save_bytes(&mut self) -> &[u8] {
+        self.ensure_transaction_closed();
+        self.doc.remove_unused_actors(true);
+        let bytes = self.doc.save_bytes();
+        if !bytes.is_empty() {
+            self.doc.get_heads_into(&mut self.save_cursor);
+        }
+        bytes
+    }
+
+    /// Save the entirety of this document in a compact form.
     pub fn save(&mut self) -> Vec<u8> {
-        self.save_with_options(SaveOptions::default())
+        self.save_bytes().to_vec()
     }
 
     pub fn save_with_options(&mut self, options: SaveOptions) -> Vec<u8> {
@@ -536,7 +550,7 @@ impl AutoCommit {
         self.doc.remove_unused_actors(true);
         let bytes = self.doc.save_with_options(options);
         if !bytes.is_empty() {
-            self.save_cursor = self.doc.get_heads()
+            self.doc.get_heads_into(&mut self.save_cursor)
         }
         bytes
     }
@@ -591,7 +605,7 @@ impl AutoCommit {
         self.ensure_transaction_closed();
         let bytes = self.doc.save_after(&self.save_cursor);
         if !bytes.is_empty() {
-            self.save_cursor = self.doc.get_heads()
+            self.doc.get_heads_into(&mut self.save_cursor)
         }
         bytes
     }

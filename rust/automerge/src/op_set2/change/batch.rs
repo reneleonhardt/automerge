@@ -1050,29 +1050,37 @@ impl Automerge {
         changes: I,
         log: &mut PatchLog,
     ) -> Result<(), AutomergeError> {
-        let mut seen: HashSet<ChangeHash> = self.queue.iter().map(Change::hash).collect();
-        let mut actor_seqs: HashMap<ActorId, HashSet<u64>> = HashMap::new();
-        let mut actor_author: HashSet<ActorId> = HashSet::new();
-
-        for change in self.queue.iter() {
-            actor_seqs
-                .entry(change.actor_id().clone())
-                .or_default()
-                .insert(change.seq());
-            if change.author().is_some() {
-                actor_author.insert(change.actor_id().clone());
-            }
-        }
-
+        let mut validation = None;
         let mut incoming = ChangeBatch::new();
+        let mut has_incoming = false;
         for change in changes {
             let hash = change.hash();
-            if self.change_graph.has_change(&hash) || seen.contains(&hash) {
+            if self.change_graph.has_change(&hash) {
+                continue;
+            }
+
+            let (seen, actor_seqs, actor_author) = validation.get_or_insert_with(|| {
+                let seen: HashSet<ChangeHash> = self.queue.iter().map(Change::hash).collect();
+                let mut actor_seqs: HashMap<ActorId, HashSet<u64>> = HashMap::new();
+                let mut actor_author: HashSet<ActorId> = HashSet::new();
+                for queued in self.queue.iter() {
+                    actor_seqs
+                        .entry(queued.actor_id().clone())
+                        .or_default()
+                        .insert(queued.seq());
+                    if queued.author().is_some() {
+                        actor_author.insert(queued.actor_id().clone());
+                    }
+                }
+                (seen, actor_seqs, actor_author)
+            });
+            if seen.contains(&hash) {
                 continue;
             }
             if self.has_actor_seq(&change) {
                 self.queue
                     .remove_actor_branch_from(change.actor_id(), change.seq().saturating_add(1));
+                self.invalidate_save_cache();
                 return Err(AutomergeError::duplicate_seq(&change));
             }
             if actor_seqs
@@ -1098,10 +1106,14 @@ impl Automerge {
                 actor_author.insert(change.actor_id().clone());
             }
             incoming.push(change)?;
+            has_incoming = true;
         }
 
         self.queue.extend(incoming);
         let changes = self.queue.pop_topo_sorted_ready(&self.change_graph);
+        if has_incoming || !changes.is_empty() {
+            self.invalidate_save_cache();
+        }
         Ok(BatchApply::new(changes).apply(self, log)?)
     }
 
@@ -1166,6 +1178,38 @@ mod tests {
     use crate::types;
     use crate::{make_rng, ActorId, AutoCommit, ROOT};
     use rand::prelude::*;
+
+    #[test]
+    fn save_cache_is_invalidated_by_changes() -> Result<(), AutomergeError> {
+        let mut doc = crate::Automerge::new();
+        let first = doc.save();
+
+        let mut tx = doc.transaction();
+        tx.put(ROOT, "key", "value")?;
+        tx.commit();
+
+        let second = doc.save();
+        assert_ne!(first, second);
+        assert_eq!(second, doc.save());
+        Ok(())
+    }
+
+    #[test]
+    fn save_cache_is_invalidated_by_batch_apply() -> Result<(), AutomergeError> {
+        let mut source = crate::Automerge::new();
+        let mut tx = source.transaction();
+        tx.put(ROOT, "key", "value")?;
+        tx.commit();
+        let change = source.get_last_local_change().unwrap();
+
+        let mut doc = crate::Automerge::new();
+        let first = doc.save();
+        doc.apply_changes([change])?;
+        let second = doc.save();
+        assert_ne!(first, second);
+        assert_eq!(second, doc.save());
+        Ok(())
+    }
 
     impl AutoCommit {
         fn apply_changes_iter(

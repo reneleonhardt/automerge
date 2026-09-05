@@ -4,6 +4,7 @@ use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::num::NonZeroU32;
 use std::ops::Add;
 use std::ops::RangeBounds;
+use std::sync::Arc;
 
 use crate::storage::BundleMetadata;
 use crate::{
@@ -28,6 +29,7 @@ use crate::{
 pub(crate) struct ChangeGraph {
     edges: Vec<Edge>,
     hashes: Vec<ChangeHash>,
+    raw_bytes: Vec<Arc<[u8]>>,
     actors: Vec<ActorIdx>,
     parents: Vec<Option<EdgeIdx>>,
     seq: Vec<u32>,
@@ -87,6 +89,7 @@ impl ChangeGraph {
             edges: Vec::new(),
             nodes_by_hash: HashMap::new(),
             hashes: Vec::new(),
+            raw_bytes: Vec::new(),
             actors: Vec::new(),
             max_ops: Vec::new(),
             max_op: 0,
@@ -497,6 +500,23 @@ impl ChangeGraph {
         self.get_build_metadata_for_indexes(change_indexes)
     }
 
+    pub(crate) fn raw_bytes_after(&self, have_deps: &[ChangeHash]) -> Option<Vec<u8>> {
+        if self.raw_bytes.len() != self.hashes.len() {
+            return None;
+        }
+
+        let clock = self.seq_clock_for_heads(have_deps);
+        let change_indexes = self.get_build_indexes(clock);
+        let capacity = change_indexes.iter().fold(0usize, |len, index| {
+            len.saturating_add(self.raw_bytes[index.0 as usize].len())
+        });
+        let mut bytes = Vec::with_capacity(capacity);
+        for index in change_indexes {
+            bytes.extend_from_slice(self.raw_bytes[index.0 as usize].as_ref());
+        }
+        Some(bytes)
+    }
+
     pub(crate) fn get_hash_for_actor_seq(
         &self,
         actor: usize,
@@ -538,6 +558,7 @@ impl ChangeGraph {
             .extend(iter.clone().map(|(c, _)| ValueMeta::from(c.extra_bytes())));
         self.parents.extend(std::iter::repeat_n(None, iter.len()));
         for (c, _) in iter {
+            self.raw_bytes.push(Arc::from(c.raw_bytes()));
             self.extra_bytes_raw.extend_from_slice(c.extra_bytes());
         }
     }
@@ -900,6 +921,10 @@ impl ChangeGraphCols {
         // for an isolated actor whose first change can start above counter 1.
         // Reconstruction has the verified changes, so use their exact lengths.
         graph.num_ops = changes.iter().map(|change| change.len() as u64).collect();
+        graph.raw_bytes = changes
+            .iter()
+            .map(|change| Arc::from(change.raw_bytes()))
+            .collect();
 
         for c in changes {
             let hash = c.hash();
@@ -1030,6 +1055,7 @@ impl ChangeGraphCols {
         Ok(ChangeGraphCols(ChangeGraph {
             edges,
             hashes,
+            raw_bytes: Vec::new(),
             actors,
             parents,
             seq,
@@ -1115,6 +1141,21 @@ mod tests {
         let expected_changes = vec![change3, change4].into_iter().collect::<BTreeSet<_>>();
 
         assert_eq!(changes, expected_changes);
+    }
+
+    #[test]
+    fn raw_bytes_after_matches_selected_changes() {
+        let mut builder = TestGraphBuilder::new();
+        let actor = builder.actor();
+        let first = builder.change(&actor, 1, &[]);
+        let second = builder.change(&actor, 1, &[first]);
+        let graph = builder.build();
+
+        assert_eq!(
+            graph.raw_bytes_after(&[first]).unwrap(),
+            builder.changes[1].raw_bytes()
+        );
+        assert!(graph.raw_bytes_after(&[second]).unwrap().is_empty());
     }
 
     struct TestGraphBuilder {

@@ -4,6 +4,7 @@ use std::env;
 use std::fmt::Debug;
 use std::num::NonZeroU64;
 use std::ops::RangeBounds;
+use std::sync::{Arc, OnceLock};
 
 use itertools::Itertools;
 
@@ -42,6 +43,173 @@ pub(crate) mod current_state;
 
 #[cfg(test)]
 mod rollback_tests;
+
+#[cfg(test)]
+mod save_cache_tests {
+    use super::*;
+    use crate::transaction::Transactable;
+
+    #[test]
+    fn save_cache_is_lazy_and_default_only() {
+        let doc = Automerge::new();
+        assert!(doc.save_cache.get().is_none());
+
+        let _ = doc.save_with_options(SaveOptions {
+            deflate: false,
+            retain_orphans: true,
+        });
+        assert!(doc.save_cache.get().is_none());
+
+        let _ = doc.save_with_options(SaveOptions {
+            deflate: true,
+            retain_orphans: false,
+        });
+        assert!(doc.save_cache.get().is_none());
+
+        let saved = doc.save_with_options(SaveOptions::default());
+        assert_eq!(saved, doc.save());
+        assert!(doc.save_cache.get().is_some());
+    }
+
+    #[test]
+    fn save_cache_is_invalidated_by_rollback() -> Result<(), AutomergeError> {
+        let mut doc = Automerge::new();
+        let saved = doc.save();
+        assert!(doc.save_cache.get().is_some());
+
+        {
+            let mut tx = doc.transaction();
+            tx.put(crate::ROOT, "key", "value")?;
+        }
+
+        assert!(doc.save_cache.get().is_none());
+        assert_eq!(saved, doc.save());
+        Ok(())
+    }
+
+    #[test]
+    fn cloned_save_caches_are_independent() -> Result<(), AutomergeError> {
+        let doc = Automerge::new();
+        let saved = doc.save();
+        let mut clone = doc.clone();
+
+        assert_eq!(saved, clone.save());
+
+        let mut tx = clone.transaction();
+        tx.put(crate::ROOT, "key", "value")?;
+        tx.commit();
+
+        assert_ne!(saved, clone.save());
+        assert_eq!(saved, doc.save());
+        Ok(())
+    }
+
+    #[test]
+    fn loaded_save_cache_is_populated_lazily() -> Result<(), AutomergeError> {
+        let mut source = Automerge::new();
+        let mut tx = source.transaction();
+        tx.put(crate::ROOT, "key", "value")?;
+        tx.commit();
+        let saved = source.save();
+
+        let loaded = Automerge::load(&saved)?;
+        assert!(loaded.save_cache.get().is_none());
+        assert_eq!(saved, loaded.save());
+        assert!(loaded.save_cache.get().is_some());
+        Ok(())
+    }
+
+    #[test]
+    fn no_change_imports_preserve_the_save_cache() -> Result<(), AutomergeError> {
+        let mut source = Automerge::new();
+        let mut tx = source.transaction();
+        tx.put(crate::ROOT, "key", "value")?;
+        tx.commit();
+        let change = source.get_last_local_change().unwrap();
+
+        let mut doc = source.clone();
+        let saved = doc.save();
+        assert!(doc.save_cache.get().is_some());
+
+        doc.apply_changes([change.clone()])?;
+        assert!(doc.save_cache.get().is_some());
+
+        assert_eq!(doc.load_incremental(change.raw_bytes())?, 0);
+        assert!(doc.save_cache.get().is_some());
+
+        let mut other = doc.clone();
+        doc.merge(&mut other)?;
+        assert!(doc.save_cache.get().is_some());
+        assert_eq!(doc.save(), saved);
+        Ok(())
+    }
+
+    #[test]
+    fn heads_cache_is_reused_and_invalidated_by_history_changes() -> Result<(), AutomergeError> {
+        let mut doc = Automerge::new();
+        assert!(doc.heads_cache.get().is_none());
+        assert!(doc.get_heads().is_empty());
+        let cached_ptr = doc.heads_cache.get().unwrap().as_ptr();
+        assert_eq!(doc.heads_cache.get().unwrap().as_ptr(), cached_ptr);
+
+        let mut tx = doc.transaction();
+        tx.put(crate::ROOT, "key", "value")?;
+        tx.commit();
+
+        assert!(doc.heads_cache.get().is_none());
+        let heads = doc.get_heads();
+        assert_eq!(heads, doc.heads_cache.get().unwrap().as_slice());
+        Ok(())
+    }
+
+    #[test]
+    fn cached_snapshot_owns_immutable_bytes_across_mutation() -> Result<(), AutomergeError> {
+        let mut doc = Automerge::new();
+        let snapshot = doc.save_cached();
+        let expected = snapshot.to_vec();
+
+        let mut tx = doc.transaction();
+        tx.put(crate::ROOT, "key", "value")?;
+        tx.commit();
+
+        assert_eq!(snapshot.as_ref(), expected.as_slice());
+        assert_ne!(snapshot.as_ref(), doc.save_cached().as_ref());
+        Ok(())
+    }
+
+    #[test]
+    fn save_to_writes_the_cached_snapshot() -> Result<(), AutomergeError> {
+        let doc = Automerge::new();
+        let expected = doc.save_cached();
+        let mut output = Vec::new();
+
+        let written = doc.save_to(&mut output).unwrap();
+
+        assert_eq!(written, expected.len());
+        assert_eq!(output, expected.as_ref());
+        Ok(())
+    }
+
+    #[test]
+    fn save_after_writer_matches_appendable_bytes() -> Result<(), AutomergeError> {
+        let mut doc = Automerge::new();
+        let mut tx = doc.transaction();
+        tx.put(crate::ROOT, "key", "value")?;
+        tx.commit();
+        let heads = doc.get_heads();
+        let mut tx = doc.transaction();
+        tx.put(crate::ROOT, "key", "updated")?;
+        tx.commit();
+
+        let expected = doc.save_after(&heads);
+        let mut output = Vec::new();
+        let written = doc.save_after_to(&heads, &mut output).unwrap();
+
+        assert_eq!(written, expected.len());
+        assert_eq!(output, expected);
+        Ok(())
+    }
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum Actor {
@@ -254,12 +422,16 @@ pub struct Automerge {
     authors: Authors,
     /// Current dependencies of this document (heads hashes).
     deps: HashSet<ChangeHash>,
+    /// Sorted heads, built lazily for read-only paths such as sync polling.
+    heads_cache: OnceLock<Vec<ChangeHash>>,
     /// The set of operations that form this document.
     pub(crate) ops: OpSet,
     /// The current actor.
     actor: Actor,
     /// The current author.
     author: Option<Author<'static>>,
+    /// Cached bytes for the common default save while the document is unchanged.
+    save_cache: OnceLock<Arc<[u8]>>,
 }
 
 impl Automerge {
@@ -271,8 +443,10 @@ impl Automerge {
             authors: Authors::with_actors(0),
             ops: OpSet::new(TextEncoding::platform_default()),
             deps: Default::default(),
+            heads_cache: OnceLock::new(),
             actor: Actor::Unused(ActorId::random()),
             author: None,
+            save_cache: OnceLock::new(),
         }
     }
 
@@ -311,8 +485,10 @@ impl Automerge {
             authors: Authors::with_actors(0),
             ops: OpSet::new(encoding),
             deps: Default::default(),
+            heads_cache: OnceLock::new(),
             actor: Actor::Unused(ActorId::random()),
             author: None,
+            save_cache: OnceLock::new(),
         }
     }
 
@@ -326,8 +502,10 @@ impl Automerge {
             authors,
             ops,
             deps,
+            heads_cache: OnceLock::new(),
             actor: Actor::Unused(ActorId::random()),
             author: None,
+            save_cache: OnceLock::new(),
         };
         doc.remove_unused_actors(false);
         doc
@@ -425,6 +603,7 @@ impl Automerge {
     }
 
     pub(crate) fn remove_actor(&mut self, actor: usize) {
+        self.invalidate_save_cache();
         self.actor.remove_actor(actor, &self.ops.actors);
         self.ops.remove_actor(actor);
         self.change_graph.remove_actor(actor);
@@ -531,6 +710,7 @@ impl Automerge {
     }
 
     pub(crate) fn transaction_args(&mut self, heads: Option<&[ChangeHash]>) -> TransactionArgs {
+        self.invalidate_save_cache();
         let actor_index;
         let seq;
         let mut deps;
@@ -1146,7 +1326,24 @@ impl Automerge {
     }
 
     /// Save the entirety of this document in a compact form.
+    ///
+    /// The returned slice is cached and remains valid while this document is immutably borrowed.
+    /// Use [`Self::save`] when an owned buffer is required.
+    pub fn save_bytes(&self) -> &[u8] {
+        self.save_cache
+            .get_or_init(|| Arc::from(self.save_with_options_uncached(SaveOptions::default())))
+            .as_ref()
+    }
+
+    /// Save the entirety of this document in a compact form.
     pub fn save_with_options(&self, options: SaveOptions) -> Vec<u8> {
+        if options.deflate && options.retain_orphans {
+            return self.save_bytes().to_vec();
+        }
+        self.save_with_options_uncached(options)
+    }
+
+    fn save_with_options_uncached(&self, options: SaveOptions) -> Vec<u8> {
         self.assert_no_unused_actors(true);
 
         let doc = Document::new(&self.ops, &self.change_graph, options.compress());
@@ -1160,6 +1357,10 @@ impl Automerge {
         bytes
     }
 
+    pub(crate) fn invalidate_save_cache(&mut self) {
+        self.save_cache = OnceLock::new();
+    }
+
     #[cfg(test)]
     pub fn debug_cmp(&self, other: &Self) {
         self.ops.debug_cmp(&other.ops);
@@ -1167,7 +1368,7 @@ impl Automerge {
 
     /// Save the entirety of this document in a compact form.
     pub fn save(&self) -> Vec<u8> {
-        self.save_with_options(SaveOptions::default())
+        self.save_bytes().to_vec()
     }
 
     /// Save the document and attempt to load it before returning - slow!
@@ -1192,8 +1393,13 @@ impl Automerge {
     /// [`Self::save()`] and you want to immediately send it somewhere (e.g. you've inserted a
     /// single character in a text object).
     pub fn save_after(&self, heads: &[ChangeHash]) -> Vec<u8> {
+        if let Some(bytes) = self.change_graph.raw_bytes_after(heads) {
+            return bytes;
+        }
+
         let changes = self.get_changes(heads);
-        let mut bytes = vec![];
+        let capacity = changes.iter().map(|change| change.raw_bytes().len()).sum();
+        let mut bytes = Vec::with_capacity(capacity);
         for c in changes {
             bytes.extend(c.raw_bytes());
         }
@@ -1321,6 +1527,7 @@ impl Automerge {
     }
 
     fn update_deps(&mut self, change: &Change) {
+        self.heads_cache.take();
         for d in change.deps() {
             self.deps.remove(d);
         }
@@ -1504,9 +1711,15 @@ impl Automerge {
 
     /// Get the heads of this document.
     pub fn get_heads(&self) -> Vec<ChangeHash> {
-        let mut deps: Vec<_> = self.deps.iter().copied().collect();
-        deps.sort_unstable();
-        deps
+        self.heads().to_vec()
+    }
+
+    pub(crate) fn heads(&self) -> &[ChangeHash] {
+        self.heads_cache.get_or_init(|| {
+            let mut heads: Vec<_> = self.deps.iter().copied().collect();
+            heads.sort_unstable();
+            heads
+        })
     }
 
     pub fn get_changes(&self, have_deps: &[ChangeHash]) -> Vec<Change> {
