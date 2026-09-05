@@ -1,5 +1,6 @@
 use am::marks::Mark;
 use automerge as am;
+use std::sync::Arc;
 
 use crate::byte_span::AMbyteSpan;
 use crate::index::AMindex;
@@ -460,6 +461,12 @@ impl From<Vec<am::sync::Have>> for AMresult {
 impl From<Vec<u8>> for AMresult {
     fn from(bytes: Vec<u8>) -> Self {
         Self::item(am::Value::bytes(bytes).into())
+    }
+}
+
+impl From<Arc<[u8]>> for AMresult {
+    fn from(bytes: Arc<[u8]>) -> Self {
+        Self::item(crate::item::Value::from(bytes).into())
     }
 }
 

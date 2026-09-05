@@ -5,6 +5,7 @@ use std::any::type_name;
 use std::borrow::Cow;
 use std::cell::{RefCell, UnsafeCell};
 use std::rc::Rc;
+use std::sync::Arc;
 
 use crate::actor_id::AMactorId;
 use crate::byte_span::{to_str, AMbyteSpan};
@@ -32,6 +33,8 @@ pub struct AMunknownValue {
 #[allow(clippy::large_enum_variant)]
 pub enum Value {
     ActorId(am::ActorId, UnsafeCell<Option<AMactorId>>),
+    /// An immutable byte buffer owned by the containing result.
+    Bytes(Arc<[u8]>),
     Change(Box<am::Change>, UnsafeCell<Option<AMchange>>),
     ChangeHash(am::ChangeHash),
     Cursor(AMcursor),
@@ -50,6 +53,9 @@ impl Value {
         use am::ScalarValue::*;
         use am::Value::*;
 
+        if let Self::Bytes(bytes) = self {
+            return Ok(bytes.as_ref().into());
+        }
         if let Self::Value(Scalar(scalar)) = &self {
             if let Bytes(vector) = scalar.as_ref() {
                 return Ok(vector.as_slice().into());
@@ -141,6 +147,12 @@ impl Value {
 impl From<am::ActorId> for Value {
     fn from(actor_id: am::ActorId) -> Self {
         Self::ActorId(actor_id, Default::default())
+    }
+}
+
+impl From<Arc<[u8]>> for Value {
+    fn from(bytes: Arc<[u8]>) -> Self {
+        Self::Bytes(bytes)
     }
 }
 
@@ -503,6 +515,7 @@ impl PartialEq for Value {
 
         match (self, other) {
             (ActorId(lhs, _), ActorId(rhs, _)) => *lhs == *rhs,
+            (Bytes(lhs), Bytes(rhs)) => lhs == rhs,
             (Change(lhs, _), Change(rhs, _)) => lhs == rhs,
             (ChangeHash(lhs), ChangeHash(rhs)) => lhs == rhs,
             (Doc(lhs), Doc(rhs)) => lhs.as_ptr() == rhs.as_ptr(),
@@ -979,6 +992,10 @@ impl TryFrom<&Item> for (am::Value<'static>, am::ObjId) {
                     expected,
                     unexpected: type_name::<AMactorId>().to_string(),
                 }),
+                Bytes(_) => Err(InvalidValueType {
+                    expected,
+                    unexpected: type_name::<AMbyteSpan>().to_string(),
+                }),
                 ChangeHash(_) => Err(InvalidValueType {
                     expected,
                     unexpected: type_name::<am::ChangeHash>().to_string(),
@@ -1375,6 +1392,7 @@ impl From<&Value> for AMvalType {
 
         match value {
             ActorId(_, _) => Self::ActorId,
+            Bytes(_) => Self::Bytes,
             Change(_, _) => Self::Change,
             ChangeHash(_) => Self::ChangeHash,
             Cursor(_) => Self::Cursor,

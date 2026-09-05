@@ -1304,7 +1304,8 @@ impl Automerge {
     }
 
     pub fn save(&mut self) -> Uint8Array {
-        Uint8Array::from(self.doc.save().as_slice())
+        let bytes = self.doc.save_cached();
+        Uint8Array::from(bytes.as_ref())
     }
 
     #[wasm_bindgen(js_name = saveIncremental)]

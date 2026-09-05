@@ -1,4 +1,5 @@
 use std::ops::RangeBounds;
+use std::sync::Arc;
 
 use crate::author::Author;
 use crate::automerge::SaveOptions;
@@ -531,6 +532,31 @@ impl AutoCommit {
         self.save_with_options(SaveOptions::default())
     }
 
+    /// Return an immutable, owned snapshot of the default save.
+    ///
+    /// The snapshot is reference-counted, so repeated calls while the document is unchanged do
+    /// not copy the encoded bytes. An open transaction is committed before the snapshot is made,
+    /// and mutations invalidate the snapshot. The snapshot itself remains valid after a later
+    /// mutation.
+    pub fn save_cached(&mut self) -> Arc<[u8]> {
+        self.ensure_transaction_closed();
+        self.doc.remove_unused_actors(true);
+        let bytes = self.doc.save_cached();
+        if !bytes.is_empty() {
+            self.save_cursor = self.doc.get_heads();
+        }
+        bytes
+    }
+
+    /// Write the default save to a caller-owned writer without an intermediate `Vec` copy.
+    ///
+    /// The returned value is the number of bytes written.
+    pub fn save_to<W: std::io::Write>(&mut self, writer: &mut W) -> std::io::Result<usize> {
+        let bytes = self.save_cached();
+        writer.write_all(&bytes)?;
+        Ok(bytes.len())
+    }
+
     pub fn save_with_options(&mut self, options: SaveOptions) -> Vec<u8> {
         self.ensure_transaction_closed();
         self.doc.remove_unused_actors(true);
@@ -596,6 +622,22 @@ impl AutoCommit {
         bytes
     }
 
+    /// Write the changes since the last call to [`Self::save`] to a caller-owned writer.
+    ///
+    /// The output is the same appendable sequence of raw change chunks as [`Self::save_incremental`],
+    /// without first concatenating it into a `Vec`.
+    pub fn save_incremental_to<W: std::io::Write>(
+        &mut self,
+        writer: &mut W,
+    ) -> std::io::Result<usize> {
+        self.ensure_transaction_closed();
+        let written = self.doc.save_after_to(&self.save_cursor, writer)?;
+        if written != 0 {
+            self.save_cursor = self.doc.get_heads()
+        }
+        Ok(written)
+    }
+
     pub fn is_empty(&self) -> bool {
         self.doc.is_empty()
     }
@@ -604,6 +646,16 @@ impl AutoCommit {
     pub fn save_after(&mut self, heads: &[ChangeHash]) -> Vec<u8> {
         self.ensure_transaction_closed();
         self.doc.save_after(heads)
+    }
+
+    /// Write every change that is not a transitive dependency of `heads` to a caller-owned writer.
+    pub fn save_after_to<W: std::io::Write>(
+        &mut self,
+        heads: &[ChangeHash],
+        writer: &mut W,
+    ) -> std::io::Result<usize> {
+        self.ensure_transaction_closed();
+        self.doc.save_after_to(heads, writer)
     }
 
     pub fn get_missing_deps(&mut self, heads: &[ChangeHash]) -> Vec<ChangeHash> {
@@ -1375,10 +1427,49 @@ impl OpRange {
 #[cfg(test)]
 mod tests {
 
+    use super::AutoCommit;
+    use crate::transaction::Transactable;
+    use crate::{ActorId, ROOT};
+
     fn is_send<S: Send>() {}
 
     #[test]
     fn test_autocommit_is_send() {
         is_send::<super::AutoCommit>();
+    }
+
+    #[test]
+    fn cached_save_and_writer_share_the_same_snapshot() {
+        let mut doc = AutoCommit::new();
+        doc.put(ROOT, "key", "value").unwrap();
+        let snapshot = doc.save_cached();
+        let mut output = Vec::new();
+
+        let written = doc.save_to(&mut output).unwrap();
+
+        assert_eq!(written, snapshot.len());
+        assert_eq!(output, snapshot.as_ref());
+    }
+
+    #[test]
+    fn incremental_writer_advances_cursor_after_success() {
+        let actor = ActorId::from("writer-test".as_bytes());
+        let mut doc = AutoCommit::new().with_actor(actor.clone());
+        doc.put(ROOT, "key", "value").unwrap();
+        let _ = doc.save_incremental();
+        doc.put(ROOT, "key", "updated").unwrap();
+
+        let mut expected_doc = AutoCommit::new().with_actor(actor);
+        expected_doc.put(ROOT, "key", "value").unwrap();
+        let _ = expected_doc.save_incremental();
+        expected_doc.put(ROOT, "key", "updated").unwrap();
+        let expected = expected_doc.save_incremental();
+
+        let mut output = Vec::new();
+        let written = doc.save_incremental_to(&mut output).unwrap();
+
+        assert_eq!(written, output.len());
+        assert_eq!(output, expected);
+        assert!(doc.save_incremental().is_empty());
     }
 }

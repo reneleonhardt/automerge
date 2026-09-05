@@ -80,6 +80,31 @@ pub fn benchmarks() -> Vec<SampledBenchmark> {
         ),
         SampledBenchmark::no_setup(
             "load_save",
+            "load_save/save_after_small_edits_170k_ops_1mb",
+            save_after_small_edits_170k_ops_1mb,
+        ),
+        SampledBenchmark::no_setup(
+            "load_save",
+            "load_save/save_incremental_small_edits_170k_ops_1mb",
+            save_incremental_small_edits_170k_ops_1mb,
+        ),
+        SampledBenchmark::no_setup(
+            "load_save",
+            "load_save/save_after_to_small_edits_170k_ops_1mb",
+            save_after_to_small_edits_170k_ops_1mb,
+        ),
+        SampledBenchmark::no_setup(
+            "load_save",
+            "load_save/save_incremental_to_small_edits_170k_ops_1mb",
+            save_incremental_to_small_edits_170k_ops_1mb,
+        ),
+        SampledBenchmark::no_setup(
+            "load_save",
+            "load_save/save_cold_fresh_170k_ops_1mb",
+            save_cold_fresh_170k_ops_1mb,
+        ),
+        SampledBenchmark::no_setup(
+            "load_save",
             "load_save/save_nocompress_170k_ops_1mb",
             save_nocompress_170k_ops_1mb,
         ),
@@ -240,6 +265,75 @@ fn save_incremental_170k_ops_1mb() -> Box<dyn FnMut()> {
         value += 1;
         let data = doc.save_incremental();
         black_box(data);
+    })
+}
+
+fn save_after_small_edits_170k_ops_1mb() -> Box<dyn FnMut()> {
+    let mut doc = large_ops_doc();
+    let mut heads = doc.get_heads();
+    let mut value = LARGE_OPS;
+    Box::new(move || {
+        let mut tx = doc.transaction();
+        tx.put(ROOT, "value", format!("{value:010x}")).unwrap();
+        tx.commit();
+        let data = doc.save_after(&heads);
+        heads = doc.get_heads();
+        value += 1;
+        black_box(data);
+    })
+}
+
+fn save_incremental_small_edits_170k_ops_1mb() -> Box<dyn FnMut()> {
+    let data = large_ops_data();
+    let mut doc = AutoCommit::load(&data).unwrap();
+    let _ = doc.save_incremental();
+    let mut value = LARGE_OPS;
+    Box::new(move || {
+        doc.put(ROOT, "value", format!("{value:010x}")).unwrap();
+        value += 1;
+        let data = doc.save_incremental();
+        black_box(data);
+    })
+}
+
+fn save_after_to_small_edits_170k_ops_1mb() -> Box<dyn FnMut()> {
+    let mut doc = large_ops_doc();
+    let mut heads = doc.get_heads();
+    let mut output = Vec::new();
+    let mut value = LARGE_OPS;
+    Box::new(move || {
+        let mut tx = doc.transaction();
+        tx.put(ROOT, "value", format!("{value:010x}")).unwrap();
+        tx.commit();
+        output.clear();
+        let written = doc.save_after_to(&heads, &mut output).unwrap();
+        heads = doc.get_heads();
+        value += 1;
+        black_box((written, output.len()));
+    })
+}
+
+fn save_incremental_to_small_edits_170k_ops_1mb() -> Box<dyn FnMut()> {
+    let data = large_ops_data();
+    let mut doc = AutoCommit::load(&data).unwrap();
+    let _ = doc.save_incremental();
+    let mut output = Vec::new();
+    let mut value = LARGE_OPS;
+    Box::new(move || {
+        doc.put(ROOT, "value", format!("{value:010x}")).unwrap();
+        value += 1;
+        output.clear();
+        let written = doc.save_incremental_to(&mut output).unwrap();
+        black_box((written, output.len()));
+    })
+}
+
+fn save_cold_fresh_170k_ops_1mb() -> Box<dyn FnMut()> {
+    let data = large_ops_data();
+    Box::new(move || {
+        let doc = Automerge::load(&data).unwrap();
+        let saved = doc.save();
+        black_box(saved);
     })
 }
 

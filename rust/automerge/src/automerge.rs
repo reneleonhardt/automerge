@@ -1328,12 +1328,31 @@ impl Automerge {
     /// Save the entirety of this document in a compact form.
     pub fn save_with_options(&self, options: SaveOptions) -> Vec<u8> {
         if options.deflate && options.retain_orphans {
-            return self
-                .save_cache
-                .get_or_init(|| Arc::from(self.save_with_options_uncached(options)))
-                .to_vec();
+            return self.save_cached().as_ref().to_vec();
         }
         self.save_with_options_uncached(options)
+    }
+
+    /// Return an immutable, owned snapshot of the default save.
+    ///
+    /// The snapshot is reference-counted, so repeated calls while the document is unchanged do
+    /// not copy the encoded bytes. It remains valid after this document is mutated; subsequent
+    /// calls return a new snapshot after the save cache is invalidated. The default save uses
+    /// DEFLATE and retains causally-unready changes, just like [`Self::save`].
+    pub fn save_cached(&self) -> Arc<[u8]> {
+        self.save_cache
+            .get_or_init(|| Arc::from(self.save_with_options_uncached(SaveOptions::default())))
+            .clone()
+    }
+
+    /// Write the default save to a caller-owned writer without an intermediate `Vec` copy.
+    ///
+    /// The writer must consume or copy the bytes before this method returns. The returned value
+    /// is the number of bytes written.
+    pub fn save_to<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<usize> {
+        let bytes = self.save_cached();
+        writer.write_all(&bytes)?;
+        Ok(bytes.len())
     }
 
     fn save_with_options_uncached(&self, options: SaveOptions) -> Vec<u8> {
@@ -1396,6 +1415,28 @@ impl Automerge {
             bytes.extend(c.raw_bytes());
         }
         bytes
+    }
+
+    /// Write the changes since the given heads to a caller-owned writer.
+    ///
+    /// The output is the same appendable sequence of raw change chunks as [`Self::save_after`],
+    /// without first concatenating it into a `Vec`.
+    pub fn save_after_to<W: std::io::Write>(
+        &self,
+        heads: &[ChangeHash],
+        writer: &mut W,
+    ) -> std::io::Result<usize> {
+        if let Some(result) = self.change_graph.raw_bytes_after_to(heads, writer) {
+            return result;
+        }
+
+        let mut written = 0;
+        for change in self.get_changes(heads) {
+            let bytes = change.raw_bytes();
+            writer.write_all(bytes)?;
+            written += bytes.len();
+        }
+        Ok(written)
     }
 
     /// Filter the changes down to those that are not transitive dependencies of the heads.

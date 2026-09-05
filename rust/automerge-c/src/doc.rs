@@ -836,7 +836,7 @@ pub unsafe extern "C" fn AMrollback(doc: *mut AMdoc) -> usize {
 #[no_mangle]
 pub unsafe extern "C" fn AMsave(doc: *mut AMdoc) -> *mut AMresult {
     let doc = to_doc_mut!(doc);
-    to_result(Ok(doc.save()))
+    to_result(doc.save_cached())
 }
 
 /// \memberof AMdoc

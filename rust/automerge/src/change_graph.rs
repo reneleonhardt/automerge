@@ -1,6 +1,7 @@
 use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
+use std::io::Write;
 use std::num::NonZeroU32;
 use std::ops::Add;
 use std::ops::RangeBounds;
@@ -515,6 +516,28 @@ impl ChangeGraph {
             bytes.extend_from_slice(self.raw_bytes[index.0 as usize].as_ref());
         }
         Some(bytes)
+    }
+
+    pub(crate) fn raw_bytes_after_to<W: Write>(
+        &self,
+        have_deps: &[ChangeHash],
+        writer: &mut W,
+    ) -> Option<std::io::Result<usize>> {
+        if self.raw_bytes.len() != self.hashes.len() {
+            return None;
+        }
+
+        let clock = self.seq_clock_for_heads(have_deps);
+        let change_indexes = self.get_build_indexes(clock);
+        let mut written = 0;
+        for index in change_indexes {
+            let bytes = self.raw_bytes[index.0 as usize].as_ref();
+            if let Err(error) = writer.write_all(bytes) {
+                return Some(Err(error));
+            }
+            written += bytes.len();
+        }
+        Some(Ok(written))
     }
 
     pub(crate) fn get_hash_for_actor_seq(
