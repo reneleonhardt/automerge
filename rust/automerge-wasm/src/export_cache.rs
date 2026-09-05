@@ -145,7 +145,7 @@ impl<'a> ExportCache<'a> {
             if obj != current_obj_id {
                 if !buffer.is_empty() {
                     _set(&o, &parent_prop, &JsValue::from_str(&buffer))?;
-                    buffer.truncate(0);
+                    buffer.clear();
                 }
                 if let Some((new_o, new_p)) = self.obj_cache.get(&obj) {
                     o = new_o.clone();

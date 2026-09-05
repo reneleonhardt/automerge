@@ -1,9 +1,20 @@
-import React from 'react';
-import { render, screen } from '@testing-library/react';
-import App from './App';
+import React from "react";
+import { render } from "@testing-library/react";
+import App from "./App";
 
-test('renders learn react link', () => {
-  render(<App />);
-  const linkElement = screen.getByText(/learn react/i);
-  expect(linkElement).toBeInTheDocument();
+jest.mock("automerge-wasm/web", () => {
+  const makeDoc = () => ({
+    materialize: () => ({}),
+    putObject: () => "edits",
+    save: () => new Uint8Array(),
+    splice: () => undefined,
+    text: () => "the quick fox jumps over the lazy dog",
+  });
+
+  return { create: makeDoc, load: makeDoc };
+});
+
+test("renders the editor", () => {
+  const { getByRole } = render(<App />);
+  expect(getByRole("textbox")).toBeInTheDocument();
 });

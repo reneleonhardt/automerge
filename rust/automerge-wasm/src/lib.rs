@@ -12,7 +12,6 @@
     dead_code,
     improper_ctypes,
     non_shorthand_field_patterns,
-    no_mangle_generic_items,
     overflowing_literals,
     path_statements,
     patterns_in_fns_without_body,
@@ -1305,8 +1304,7 @@ impl Automerge {
     }
 
     pub fn save(&mut self) -> Uint8Array {
-        // The JS-owned result still requires one copy, but avoid a temporary Rust Vec.
-        Uint8Array::from(self.doc.save_bytes())
+        Uint8Array::from(self.doc.save().as_slice())
     }
 
     #[wasm_bindgen(js_name = saveIncremental)]
@@ -1857,7 +1855,7 @@ impl Automerge {
         let hashes: Vec<automerge::ChangeHash> = JS(hashes).try_into()?;
         let bundle = self
             .doc
-            .bundle(hashes.into_iter())
+            .bundle(hashes)
             .map_err(error::SaveBundle::DoBundle)?;
         Ok(Uint8Array::from(bundle.bytes()))
     }

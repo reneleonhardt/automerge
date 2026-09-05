@@ -1,6 +1,7 @@
 import { describe, it } from "mocha";
 import assert from "assert";
-import { create, Automerge, ObjID } from "../nodejs/automerge_wasm.cjs";
+import { create, Automerge } from "../nodejs/automerge_wasm.cjs";
+import type { ObjID } from "../nodejs/automerge_wasm.cjs";
 
 describe("blocks", () => {
   describe("when splitting a block", () => {

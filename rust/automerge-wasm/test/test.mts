@@ -5,7 +5,6 @@ import { BloomFilter } from "./helpers/sync.mjs";
 import {
   create,
   load,
-  SyncState,
   Automerge,
   encodeChange,
   decodeChange,
@@ -15,7 +14,7 @@ import {
   encodeSyncState,
   encodeSyncMessage,
 } from "../nodejs/automerge_wasm.cjs";
-import { DecodedSyncMessage, Hash } from "../nodejs/automerge_wasm.cjs";
+import type { DecodedSyncMessage, Hash, SyncState } from "../nodejs/automerge_wasm.cjs";
 
 function sync(
   a: Automerge,
