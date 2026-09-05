@@ -436,7 +436,7 @@ impl<'a> ProgressiveEncoder<'a> {
         default: usize,
         m: &mut ActorMapper<'_>,
     ) -> Vec<Option<ActorIdx>> {
-        m.other_actors.truncate(0);
+        m.other_actors.clear();
         let mut seen_index = 1;
         if default >= self.actors.len() {
             self.actors.resize(default + 1, false);

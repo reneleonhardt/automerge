@@ -1133,7 +1133,7 @@ impl TransactionInner {
             .iter()
             .filter(|(key, _)| !present_keys.contains(*key))
             .collect::<Vec<_>>();
-        additions.sort_unstable_by(|(left, _), (right, _)| left.cmp(right));
+        additions.sort_unstable_by_key(|(left, _)| *left);
         for (key, new_value) in additions {
             self.update_value(doc, patch_log, map, key.into(), &new_value.value, None)?;
         }
@@ -1347,7 +1347,7 @@ impl TransactionInner {
         let mut queue: VecDeque<(ObjMeta, &hydrate::Value)> = VecDeque::new();
 
         let mut keys: Vec<_> = value.iter().collect();
-        keys.sort_by(|(a, _), (b, _)| a.cmp(b));
+        keys.sort_by_key(|(a, _)| *a);
 
         for (key, map_value) in keys {
             let child_value = &map_value.value;
@@ -1544,7 +1544,7 @@ fn batch_bfs(
         match (container_meta.typ, container_value) {
             (ObjType::Map, hydrate::Value::Map(map)) => {
                 let mut keys: Vec<_> = map.iter().collect();
-                keys.sort_by(|(a, _), (b, _)| a.cmp(b));
+                keys.sort_by_key(|(a, _)| *a);
 
                 for (key, map_value) in keys {
                     let child_value = &map_value.value;

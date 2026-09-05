@@ -344,8 +344,7 @@ impl<'a> MarkStateMachine<'a> {
         Some(
             state[0..index]
                 .iter_mut()
-                .filter(|(_, m)| m.name == mark.name)
-                .next_back()?
+                .rfind(|(_, m)| m.name == mark.name)?
                 .1
                 .clone(),
         )
@@ -368,18 +367,13 @@ impl Display for MarkData<'_> {
 /// mark should also inherit the mark.
 /// See <https://www.inkandswitch.com/peritext/> for details and
 /// suggestions of which value to use for which operations when building a rich text editor.
-#[derive(PartialEq, Debug, Clone, Copy)]
+#[derive(PartialEq, Debug, Clone, Copy, Default)]
 pub enum ExpandMark {
     Before,
+    #[default]
     After,
     Both,
     None,
-}
-
-impl Default for ExpandMark {
-    fn default() -> Self {
-        Self::After
-    }
 }
 
 impl ExpandMark {

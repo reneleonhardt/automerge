@@ -205,6 +205,13 @@ impl OpBuilder<'_> {
         match seq_type {
             SequenceType::List => 1,
             SequenceType::Text if self.is_mark() => 0,
+            // Non-string values use U+FFFC for display but occupy one block index.
+            SequenceType::Text
+                if (self.action != Action::Set && !self.is_mark())
+                    || !matches!(&self.value, ScalarValue::Str(_)) =>
+            {
+                1
+            }
             SequenceType::Text => text_encoding.width(self.as_str()),
         }
     }
@@ -1008,6 +1015,13 @@ impl<'a> Op<'a> {
         match seq_type {
             SequenceType::List => 1,
             SequenceType::Text if self.action == Action::Mark => 0,
+            // Non-string values use U+FFFC for display but occupy one block index.
+            SequenceType::Text
+                if (self.action != Action::Set && self.action != Action::Mark)
+                    || !matches!(&self.value, ScalarValue::Str(_)) =>
+            {
+                1
+            }
             SequenceType::Text => text_encoding.width(self.as_str()),
         }
     }

@@ -1326,19 +1326,12 @@ impl Automerge {
     }
 
     /// Save the entirety of this document in a compact form.
-    ///
-    /// The returned slice is cached and remains valid while this document is immutably borrowed.
-    /// Use [`Self::save`] when an owned buffer is required.
-    pub fn save_bytes(&self) -> &[u8] {
-        self.save_cache
-            .get_or_init(|| Arc::from(self.save_with_options_uncached(SaveOptions::default())))
-            .as_ref()
-    }
-
-    /// Save the entirety of this document in a compact form.
     pub fn save_with_options(&self, options: SaveOptions) -> Vec<u8> {
         if options.deflate && options.retain_orphans {
-            return self.save_bytes().to_vec();
+            return self
+                .save_cache
+                .get_or_init(|| Arc::from(self.save_with_options_uncached(options)))
+                .to_vec();
         }
         self.save_with_options_uncached(options)
     }
@@ -1368,7 +1361,7 @@ impl Automerge {
 
     /// Save the entirety of this document in a compact form.
     pub fn save(&self) -> Vec<u8> {
-        self.save_bytes().to_vec()
+        self.save_with_options(SaveOptions::default())
     }
 
     /// Save the document and attempt to load it before returning - slow!
@@ -1398,8 +1391,7 @@ impl Automerge {
         }
 
         let changes = self.get_changes(heads);
-        let capacity = changes.iter().map(|change| change.raw_bytes().len()).sum();
-        let mut bytes = Vec::with_capacity(capacity);
+        let mut bytes = vec![];
         for c in changes {
             bytes.extend(c.raw_bytes());
         }

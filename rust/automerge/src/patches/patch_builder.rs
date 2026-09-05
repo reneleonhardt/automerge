@@ -270,11 +270,9 @@ impl PatchBuilder<'_> {
                 index: tail_index,
                 length: tail_length,
                 ..
-            }) => {
-                if index == *tail_index {
-                    *tail_length += length;
-                    return;
-                }
+            }) if index == *tail_index => {
+                *tail_length += length;
+                return;
             }
             _ => {}
         }

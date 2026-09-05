@@ -110,11 +110,8 @@ impl<T: compression::ColumnCompression> RawColumns<T> {
     pub(crate) fn uncompressed(&self) -> Option<RawColumns<compression::Uncompressed>> {
         let mut result = Vec::with_capacity(self.0.len());
         for col in &self.0 {
-            if let Some(uncomp) = col.uncompressed() {
-                result.push(uncomp);
-            } else {
-                return None;
-            }
+            let uncomp = col.uncompressed()?;
+            result.push(uncomp);
         }
         Some(RawColumns(result))
     }

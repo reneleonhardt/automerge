@@ -511,8 +511,7 @@ impl PatchLog {
         let clock = self.heads.as_ref().map(|h| doc.change_graph.clock_at(h));
         let path_map = self.get_path_map();
         let text_encoding = doc.text_encoding();
-        self.events
-            .sort_by(|(obj_a, _), (obj_b, _)| obj_a.cmp(obj_b));
+        self.events.sort_by_key(|(obj_a, _)| *obj_a);
         let mut expose = ExposeQueue(self.expose.iter().map(|id| doc.id_to_exid(*id)).collect());
         let mut patch_builder = PatchBuilder::new(doc, path_map, clock.clone(), text_encoding);
         for (obj, event) in &self.events {

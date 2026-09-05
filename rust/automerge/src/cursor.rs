@@ -67,16 +67,11 @@ impl From<usize> for CursorPosition {
 ///
 /// With `MoveCursor::After`, the cursor will shift to the **next item that was visible at the time of cursor creation.**
 /// If no next item is found that's still visible, the cursor will dereference to `sequence.length`.
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Clone, PartialEq, Debug, Default)]
 pub enum MoveCursor {
     Before,
+    #[default]
     After,
-}
-
-impl Default for MoveCursor {
-    fn default() -> Self {
-        Self::After
-    }
 }
 
 const VERSION_TAG: u8 = 1;

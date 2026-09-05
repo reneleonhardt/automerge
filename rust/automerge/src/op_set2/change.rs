@@ -294,9 +294,9 @@ impl<'a> ActorMapper<'a> {
 
     fn reset(&mut self) {
         let len = self.actors.len();
-        self.seen_actors.truncate(0);
-        self.mapping.truncate(0);
-        self.other_actors.truncate(0);
+        self.seen_actors.clear();
+        self.mapping.clear();
+        self.other_actors.clear();
 
         self.seen_actors.resize(len, false);
         self.mapping.resize(len, None);

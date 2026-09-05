@@ -56,7 +56,7 @@ impl<'a> BundleBuilder<'a> {
     ) -> BundleBuilder<'a> {
         // change[n].builder starts off as NodeIdx which is topo order
         // writing the changes in topo order prevents un-needed hashes in the external buffer
-        changes.sort_by(|a, b| a.builder.cmp(&b.builder));
+        changes.sort_by_key(|a| a.builder);
 
         let mut builders: Vec<_> = changes
             .iter()

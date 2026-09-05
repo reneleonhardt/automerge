@@ -616,7 +616,7 @@ mod tests {
 
     #[test]
     fn test_round_trips() {
-        let testcases = vec![
+        let testcases = [
             Op {
                 action: OpType::Put(ScalarValue::Uint(12)),
                 obj: ObjectId::Root,
