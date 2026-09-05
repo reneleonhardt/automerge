@@ -30,6 +30,9 @@ const args = [
   "-Zbuild-std=std,panic_unwind",
 ]
 
+const features = process.env.FEATURES?.trim()
+if (features) args.push("--features", features)
+
 // Compose RUSTFLAGS, preserving any the user already set.
 const env = { ...process.env }
 const extra = "-C panic=unwind -C llvm-args=-wasm-use-legacy-eh"

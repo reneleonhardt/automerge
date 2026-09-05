@@ -30,6 +30,21 @@ cargo run --release -p benchmark-battery -- run \
   --output before-load-save.json
 ```
 
+Run the complete load/save matrix with the opt-in zstd transport rows enabled.
+This keeps current-format, uncompressed, and zstd measurements in one run:
+
+```sh
+cargo run --release -p benchmark-battery --features zstd -- run \
+  --filter load_save \
+  --tier slow \
+  --output zstd-load-save.json
+```
+
+To run only codec-specific rows, use `--filter load_save/zstd`.
+
+These measurements keep codec-only work separate from full save/load paths and
+never apply zstd to Automerge bytes that are already DEFLATE-compressed.
+
 Every output file records all benchmarks known to the binary. Benchmarks excluded by the tier or filter, or unavailable in that build, are recorded as `not_run`. This lets comparison distinguish an existing benchmark that was not measured from a benchmark that was added or removed.
 
 Additional measurements can be added to the same file with `--append`. New measurements replace matching `not_run` entries or earlier measurements of the same benchmark, while unrelated measured results are preserved:

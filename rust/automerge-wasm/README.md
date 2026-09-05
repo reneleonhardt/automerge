@@ -468,6 +468,13 @@ is only used for this wasm build. Environments without rustup can set
 `WASM_CARGO` to a Cargo executable that already selects the required nightly;
 the repository's Nix flake uses this mechanism.
 
+Optional zstd transport helpers can be included in a package build with
+`npm run build:zstd` or `npm run release:zstd`. They expose
+`compressZstd(data, level?)` and `decompressZstd(data, maxOutputSize)` for
+transport or archive envelopes. Decompress the result before passing it to
+`load()`. The feature is disabled by default and is separate from the
+Automerge document and sync formats.
+
 ### Appendix: WASM and Memory Allocation
 
 Allocated memory in rust will be freed automatically on platforms that support `FinalizationRegistry`.

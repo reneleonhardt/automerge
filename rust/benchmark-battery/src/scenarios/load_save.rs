@@ -1,5 +1,7 @@
 use super::SampledBenchmark;
 use benchmark_battery::automerge::transaction::Transactable;
+#[cfg(feature = "zstd")]
+use benchmark_battery::automerge::zstd;
 use benchmark_battery::automerge::{AutoCommit, Automerge, ReadDoc, SaveOptions, ROOT};
 use benchmark_battery::{
     big_paste_doc, big_random_doc, deep_history_doc, maps_in_maps_doc, poorly_simulated_typing_doc,
@@ -112,6 +114,36 @@ pub fn benchmarks() -> Vec<SampledBenchmark> {
             "load_save",
             "load_save/load_nocompress_170k_ops_1mb",
             load_nocompress_170k_ops_1mb,
+        ),
+        #[cfg(feature = "zstd")]
+        SampledBenchmark::no_setup(
+            "load_save",
+            "load_save/compress_zstd_170k_ops_1mb",
+            compress_zstd_170k_ops_1mb,
+        ),
+        #[cfg(feature = "zstd")]
+        SampledBenchmark::no_setup(
+            "load_save",
+            "load_save/decompress_zstd_170k_ops_1mb",
+            decompress_zstd_170k_ops_1mb,
+        ),
+        #[cfg(feature = "zstd")]
+        SampledBenchmark::no_setup(
+            "load_save",
+            "load_save/load_zstd_170k_ops_1mb",
+            load_zstd_170k_ops_1mb,
+        ),
+        #[cfg(feature = "zstd")]
+        SampledBenchmark::no_setup(
+            "load_save",
+            "load_save/save_zstd_170k_ops_1mb",
+            save_zstd_170k_ops_1mb,
+        ),
+        #[cfg(feature = "zstd")]
+        SampledBenchmark::no_setup(
+            "load_save",
+            "load_save/save_zstd_cold_fresh_170k_ops_1mb",
+            save_zstd_cold_fresh_170k_ops_1mb,
         ),
     ]
 }
@@ -350,6 +382,57 @@ fn load_nocompress_170k_ops_1mb() -> Box<dyn FnMut()> {
     Box::new(move || {
         let doc = Automerge::load(&data).unwrap();
         black_box(doc);
+    })
+}
+
+#[cfg(feature = "zstd")]
+fn compress_zstd_170k_ops_1mb() -> Box<dyn FnMut()> {
+    let data = large_ops_doc().save_nocompress();
+    Box::new(move || {
+        let compressed = zstd::compress(&data, zstd::DEFAULT_COMPRESSION_LEVEL).unwrap();
+        black_box(compressed);
+    })
+}
+
+#[cfg(feature = "zstd")]
+fn decompress_zstd_170k_ops_1mb() -> Box<dyn FnMut()> {
+    let data = large_ops_doc().save_nocompress();
+    let compressed = zstd::compress(&data, zstd::DEFAULT_COMPRESSION_LEVEL).unwrap();
+    Box::new(move || {
+        let decompressed = zstd::decompress(&compressed, data.len()).unwrap();
+        black_box(decompressed);
+    })
+}
+
+#[cfg(feature = "zstd")]
+fn load_zstd_170k_ops_1mb() -> Box<dyn FnMut()> {
+    let data = large_ops_doc().save_nocompress();
+    let compressed = zstd::compress(&data, zstd::DEFAULT_COMPRESSION_LEVEL).unwrap();
+    Box::new(move || {
+        let decompressed = zstd::decompress(&compressed, data.len()).unwrap();
+        let doc = Automerge::load(&decompressed).unwrap();
+        black_box(doc);
+    })
+}
+
+#[cfg(feature = "zstd")]
+fn save_zstd_170k_ops_1mb() -> Box<dyn FnMut()> {
+    let doc = large_ops_doc();
+    Box::new(move || {
+        let data = doc.save_nocompress();
+        let compressed = zstd::compress(&data, zstd::DEFAULT_COMPRESSION_LEVEL).unwrap();
+        black_box(compressed);
+    })
+}
+
+#[cfg(feature = "zstd")]
+fn save_zstd_cold_fresh_170k_ops_1mb() -> Box<dyn FnMut()> {
+    let data = large_ops_data();
+    Box::new(move || {
+        let doc = Automerge::load(&data).unwrap();
+        let uncompressed = doc.save_nocompress();
+        let compressed = zstd::compress(&uncompressed, zstd::DEFAULT_COMPRESSION_LEVEL).unwrap();
+        black_box(compressed);
     })
 }
 

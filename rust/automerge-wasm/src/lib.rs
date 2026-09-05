@@ -434,6 +434,13 @@ export type UpdateSpansConfig = {
 }
 "#;
 
+#[cfg(feature = "zstd")]
+#[wasm_bindgen(typescript_custom_section)]
+const ZSTD_TS: &'static str = r#"
+export function compressZstd(data: Uint8Array, level?: number): Uint8Array;
+export function decompressZstd(data: Uint8Array, maxOutputSize: number): Uint8Array;
+"#;
+
 #[allow(unused_macros)]
 macro_rules! log {
     ( $( $t:tt )* ) => {
@@ -1942,6 +1949,25 @@ pub fn load(data: Uint8Array, options: JsValue) -> Result<Automerge, error::Load
         freeze: false,
         external_types: HashMap::default(),
     })
+}
+
+#[cfg(feature = "zstd")]
+#[wasm_bindgen(js_name = compressZstd, skip_typescript)]
+pub fn compress_zstd(data: Uint8Array, level: Option<i32>) -> Result<Uint8Array, JsValue> {
+    let compressed = am::zstd::compress(
+        &data.to_vec(),
+        level.unwrap_or(am::zstd::DEFAULT_COMPRESSION_LEVEL),
+    )
+    .map_err(|error| JsValue::from_str(&error.to_string()))?;
+    Ok(Uint8Array::from(compressed.as_slice()))
+}
+
+#[cfg(feature = "zstd")]
+#[wasm_bindgen(js_name = decompressZstd, skip_typescript)]
+pub fn decompress_zstd(data: Uint8Array, max_output_size: u32) -> Result<Uint8Array, JsValue> {
+    let decompressed = am::zstd::decompress(&data.to_vec(), max_output_size as usize)
+        .map_err(|error| JsValue::from_str(&error.to_string()))?;
+    Ok(Uint8Array::from(decompressed.as_slice()))
 }
 
 #[wasm_bindgen(js_name = wasmReleaseInfo, unchecked_return_type = "WasmReleaseInfo")]

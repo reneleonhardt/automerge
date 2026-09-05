@@ -27,6 +27,7 @@ bench = false
 [features]
 # default = ["wee_alloc"]
 default = []
+zstd = ["automerge/zstd"]
 
 [dependencies]
 # wee_alloc = { version = "^0.4", optional = true }
@@ -55,3 +56,4 @@ features = ["console"]
 proptest = { version = "^1.0.0", default-features = false, features = ["std"] }
 wasm-bindgen-futures = "^0.4"
 wasm-bindgen-test = "^0.3"
+getrandom = { version = "0.3.4", features = ["wasm_js"] }

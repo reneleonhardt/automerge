@@ -287,11 +287,15 @@ pub mod sync;
 mod text_diff;
 mod text_value;
 pub mod transaction;
+pub mod transport;
 mod types;
 mod value;
+#[cfg(feature = "zstd")]
+pub mod zstd;
 
 pub use crate::anonymize::AnonymizeError;
 pub use crate::automerge::{Automerge, LoadOptions, OnPartialLoad, SaveOptions, StringMigration};
+pub use crate::transport::{TransportCompression, TransportError};
 pub use author::Author;
 pub use autocommit::AutoCommit;
 pub use autoserde::AutoSerde;
