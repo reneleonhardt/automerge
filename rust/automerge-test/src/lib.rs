@@ -482,6 +482,6 @@ pub fn pretty_panic(expected_obj: RealizedObject, realized: RealizedObject) {
     let serde_left = serde_json::to_string_pretty(&expected_obj).unwrap();
     panic!(
         "documents didn't match\n expected\n{}\n got\n{}",
-        &serde_left, &serde_right
+        serde_left, serde_right
     );
 }

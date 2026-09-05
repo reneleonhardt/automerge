@@ -1310,6 +1310,7 @@ impl TryFrom<&AMitem> for (am::Value<'static>, am::ObjId) {
 /// \brief The type of an item's value.
 #[derive(Eq, PartialEq)]
 #[repr(C)]
+#[derive(Default)]
 pub enum AMvalType {
     /// An actor identifier value.
     ActorId = 1 << 1,
@@ -1326,6 +1327,7 @@ pub enum AMvalType {
     /// A cursor value.
     Cursor = 1 << 7,
     /// The default tag, not a type signifier.
+    #[default]
     Default = 0,
     /// A document value.
     Doc = 1 << 8,
@@ -1355,12 +1357,6 @@ pub enum AMvalType {
     Unknown = 1 << 20,
     /// A void.
     Void = 1 << 0,
-}
-
-impl Default for AMvalType {
-    fn default() -> Self {
-        Self::Default
-    }
 }
 
 impl From<&am::Value<'static>> for AMvalType {

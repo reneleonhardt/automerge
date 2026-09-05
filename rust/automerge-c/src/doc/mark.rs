@@ -29,14 +29,13 @@ macro_rules! to_expand_mark {
     }};
 }
 
-pub(crate) use to_expand_mark;
-
 /// \ingroup enumerations
 /// \enum AMmarkExpand
 /// \installed_headerfile
 /// \brief A mark's expansion mode for when bordering text is inserted.
 #[derive(Eq, PartialEq)]
 #[repr(C)]
+#[derive(Default)]
 pub enum AMmarkExpand {
     /// Include text inserted at the end offset.
     After = 3,
@@ -45,15 +44,10 @@ pub enum AMmarkExpand {
     /// Include text inserted at either offset.
     Both = 4,
     /// The default tag, not a mark expansion mode signifier.
+    #[default]
     Default = 0,
     /// Exclude text inserted at either offset.
     None = 1,
-}
-
-impl Default for AMmarkExpand {
-    fn default() -> Self {
-        Self::Default
-    }
 }
 
 impl TryFrom<&AMmarkExpand> for ExpandMark {

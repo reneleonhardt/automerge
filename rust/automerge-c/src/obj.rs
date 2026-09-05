@@ -167,8 +167,10 @@ pub unsafe extern "C" fn AMobjIdIndex(obj_id: *const AMobjId) -> usize {
 /// \brief The type of an object.
 #[derive(Eq, PartialEq)]
 #[repr(C)]
+#[derive(Default)]
 pub enum AMobjType {
     /// The default tag, not a type signifier.
+    #[default]
     Default = 0,
     /// A list.
     List = 1,
@@ -176,12 +178,6 @@ pub enum AMobjType {
     Map,
     /// A list of Unicode graphemes.
     Text,
-}
-
-impl Default for AMobjType {
-    fn default() -> Self {
-        Self::Default
-    }
 }
 
 impl From<&am::ObjType> for AMobjType {

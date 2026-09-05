@@ -57,19 +57,15 @@ impl TryFrom<&AMindex> for usize {
 /// \brief The type of an item's index.
 #[derive(Eq, PartialEq)]
 #[repr(C)]
+#[derive(Default)]
 pub enum AMidxType {
     /// The default tag, not a type signifier.
+    #[default]
     Default = 0,
     /// A UTF-8 string view key.
     Key,
     /// A 64-bit unsigned integer position.
     Pos,
-}
-
-impl Default for AMidxType {
-    fn default() -> Self {
-        Self::Default
-    }
 }
 
 impl From<&AMindex> for AMidxType {
