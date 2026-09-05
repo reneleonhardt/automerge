@@ -11,6 +11,10 @@ readme = "./README.md"
 [lib]
 bench = false
 
+[[bench]]
+name = "copy_ranges"
+harness = false
+
 
 [features]
 wasm = ["web-sys"]

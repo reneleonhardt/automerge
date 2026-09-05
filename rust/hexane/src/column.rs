@@ -671,8 +671,6 @@ pub(crate) enum CopyStrategy {
 }
 
 /// Safety factor favouring Direct in [`Column::copy_strategy`].  The
-/// seam term is already a gross upper bound, so 1 is not aggressive;
-/// see `copy_ranges_bench`.
 pub(crate) const COPY_INVERT_FACTOR: usize = 1;
 
 /// Clamp `ranges` to `len`, drop empties, merge touching neighbours,
@@ -1619,6 +1617,23 @@ where
         use crate::shift::Shiftable;
         match strategy {
             CopyStrategy::Direct => {
+                if splices.len() > 1 {
+                    let pos = splices[0].pos;
+                    if splices.iter().all(|sp| sp.pos == pos && sp.delete == 0) {
+                        // Treat repeated insertions at one position as a single splice: keep
+                        // source windows lazy and open the destination edit once.
+                        let ranges = splices.iter().map(|sp| sp.range.clone());
+                        self.splice_inner(
+                            pos,
+                            0,
+                            src.iter()
+                                .runs()
+                                .ranges(ranges)
+                                .map(|run| (run.value, run.count)),
+                        );
+                        return;
+                    }
+                }
                 // Two forward passes that never restart. The source
                 // ranges ascend and never overlap, so one iterator covers
                 // them; the splice positions ascend in the original
