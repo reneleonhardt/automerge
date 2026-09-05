@@ -13,6 +13,7 @@ use clap::{
 
 mod anonymize;
 mod color_json;
+mod copy;
 mod examine;
 mod examine_sync;
 mod export;
@@ -145,6 +146,15 @@ enum Command {
         /// The file(s) to compact. If empty assumes stdin
         input: Vec<PathBuf>,
     },
+    /// Validate an Automerge document and preserve its exact bytes
+    Copy {
+        /// The Automerge document to copy. If omitted, reads from stdin
+        input_file: Option<PathBuf>,
+
+        /// The file to write to. If omitted, writes to stdout
+        #[clap(long("out"), short('o'))]
+        output_file: Option<PathBuf>,
+    },
 }
 
 fn open_file_or_stdin(maybe_path: Option<PathBuf>) -> Result<Box<dyn std::io::Read>> {
@@ -169,12 +179,68 @@ fn create_file_or_stdout(maybe_path: Option<PathBuf>) -> Result<Box<dyn std::io:
     }
 }
 
+fn write_file_if_changed(path: &Path, bytes: &[u8]) -> Result<()> {
+    match std::fs::read(path) {
+        Ok(existing) if existing == bytes => return Ok(()),
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
+    }
+    std::fs::write(path, bytes)?;
+    Ok(())
+}
+
+fn write_output(output_file: Option<PathBuf>, bytes: &[u8]) -> Result<()> {
+    if let Some(output_file) = output_file {
+        write_file_if_changed(&output_file, bytes)
+    } else {
+        let mut output = create_file_or_stdout(None)?;
+        output.write_all(bytes)?;
+        Ok(())
+    }
+}
+
 fn paths_refer_to_same_file(input: &Path, output: &Path) -> Result<bool> {
-    Ok(input == output || (output.exists() && input.canonicalize()? == output.canonicalize()?))
+    if input == output || !output.exists() {
+        return Ok(input == output);
+    }
+
+    let input_metadata = std::fs::metadata(input)?;
+    let output_metadata = std::fs::metadata(output)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if input_metadata.dev() == output_metadata.dev()
+            && input_metadata.ino() == output_metadata.ino()
+        {
+            return Ok(true);
+        }
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        if input_metadata.volume_serial_number() == output_metadata.volume_serial_number()
+            && input_metadata.file_index() == output_metadata.file_index()
+        {
+            return Ok(true);
+        }
+    }
+    Ok(input.canonicalize()? == output.canonicalize()?)
+}
+
+fn ensure_paths_differ(input: Option<&Path>, output: Option<&Path>) -> Result<()> {
+    if let (Some(input), Some(output)) = (input, output) {
+        if paths_refer_to_same_file(input, output)? {
+            return Err(anyhow!("input and output paths must differ"));
+        }
+    }
+    Ok(())
 }
 
 fn main() -> Result<()> {
-    tracing_subscriber::fmt::init();
+    tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
+        .init();
     let opts = Opts::parse();
     match opts.cmd {
         Command::Export {
@@ -183,6 +249,7 @@ fn main() -> Result<()> {
             output_file,
             skip_verifying_heads,
         } => {
+            ensure_paths_differ(changes_file.as_deref(), output_file.as_deref())?;
             let output: Box<dyn std::io::Write> = if let Some(output_file) = output_file {
                 Box::new(File::create(output_file)?)
             } else {
@@ -207,6 +274,7 @@ fn main() -> Result<()> {
             changes_file,
         } => match format {
             ExportFormat::Json => {
+                ensure_paths_differ(input_file.as_deref(), changes_file.as_deref())?;
                 let mut out_buffer = create_file_or_stdout(changes_file)?;
                 let mut in_buffer = open_file_or_stdin(input_file)?;
                 import::import_json(&mut in_buffer, &mut out_buffer)
@@ -248,11 +316,7 @@ fn main() -> Result<()> {
             input_file,
             output_file,
         } => {
-            if let (Some(input), Some(output)) = (&input_file, &output_file) {
-                if paths_refer_to_same_file(input, output)? {
-                    return Err(anyhow!("input and output paths must differ"));
-                }
-            }
+            ensure_paths_differ(input_file.as_deref(), output_file.as_deref())?;
 
             let input = open_file_or_stdin(input_file)?;
             // Do not truncate an existing output until the input has loaded and anonymization has
@@ -271,13 +335,18 @@ fn main() -> Result<()> {
             Ok(())
         }
         Command::Merge { input, output_file } => {
-            let out_buffer = create_file_or_stdout(output_file)?;
-            match merge::merge(input.into(), out_buffer) {
-                Ok(()) => {}
-                Err(e) => {
-                    eprintln!("Failed to merge: {}", e);
-                }
-            };
+            match merge::merge(input.into()) {
+                Ok(merged) => write_output(output_file, &merged)?,
+                Err(e) => return Err(e.into()),
+            }
+            Ok(())
+        }
+        Command::Copy {
+            input_file,
+            output_file,
+        } => {
+            let bytes = copy::copy(input_file)?;
+            write_output(output_file, &bytes)?;
             Ok(())
         }
     }

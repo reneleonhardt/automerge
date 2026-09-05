@@ -26,13 +26,13 @@ pub(super) enum MergeError {
     #[error("failed to load {path}: {error}")]
     FailedToLoad {
         path: PathBuf,
-        error: Box<dyn std::error::Error>,
+        error: Box<dyn std::error::Error + Send + Sync>,
     },
     #[error(transparent)]
     Automerge(#[from] am::AutomergeError),
 }
 
-pub(super) fn merge<W: std::io::Write>(inputs: Inputs, mut output: W) -> Result<(), MergeError> {
+pub(super) fn merge(inputs: Inputs) -> Result<Vec<u8>, MergeError> {
     let mut backend = am::Automerge::new();
     match inputs {
         Inputs::Stdin => {
@@ -47,11 +47,13 @@ pub(super) fn merge<W: std::io::Write>(inputs: Inputs, mut output: W) -> Result<
             }
         }
     }
-    output.write_all(&backend.save())?;
-    Ok(())
+    Ok(backend.save())
 }
 
-fn load_path(backend: &mut am::Automerge, path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+fn load_path(
+    backend: &mut am::Automerge,
+    path: &Path,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let input = std::fs::read(path).map_err(Box::new)?;
     backend.load_incremental(&input).map_err(Box::new)?;
     Ok(())
