@@ -1,8 +1,9 @@
 use std::{
-    fs::File,
-    io::{IsTerminal, Write},
+    fs::{File, OpenOptions},
+    io::{self, IsTerminal, Write},
     path::{Path, PathBuf},
     str::FromStr,
+    sync::atomic::{AtomicU64, Ordering},
 };
 
 use anyhow::{anyhow, Result};
@@ -146,12 +147,12 @@ enum Command {
         /// The file(s) to compact. If empty assumes stdin
         input: Vec<PathBuf>,
     },
-    /// Validate an Automerge document and preserve its exact bytes
+    /// Validate an Automerge document and preserve its exact bytes.
     Copy {
-        /// The Automerge document to copy. If omitted, reads from stdin
+        /// The Automerge document to copy. If omitted, reads from stdin.
         input_file: Option<PathBuf>,
 
-        /// The file to write to. If omitted, writes to stdout
+        /// The file to write to. If omitted, writes to stdout.
         #[clap(long("out"), short('o'))]
         output_file: Option<PathBuf>,
     },
@@ -161,33 +162,235 @@ fn open_file_or_stdin(maybe_path: Option<PathBuf>) -> Result<Box<dyn std::io::Re
     if let Some(path) = maybe_path {
         Ok(Box::new(File::open(path)?))
     } else if std::io::stdin().is_terminal() {
-        Err(anyhow!(
-            "Must provide file path if not providing input via stdin"
-        ))
+        Err(anyhow!("Provide a file path or pipe input through stdin"))
     } else {
         Ok(Box::new(std::io::stdin()))
     }
 }
 
-fn create_file_or_stdout(maybe_path: Option<PathBuf>) -> Result<Box<dyn std::io::Write>> {
-    if let Some(path) = maybe_path {
-        Ok(Box::new(File::create(path)?))
-    } else if std::io::stdout().is_terminal() {
-        Err(anyhow!("Must provide file path if not piping to stdout"))
+struct AtomicOutput {
+    destination: PathBuf,
+    temporary: Option<(PathBuf, File)>,
+    permissions: Option<std::fs::Permissions>,
+}
+
+static TEMPORARY_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+impl AtomicOutput {
+    fn new(destination: PathBuf) -> Result<Self> {
+        let permissions = validate_output_destination(&destination)?;
+
+        let parent = destination.parent().unwrap_or_else(|| Path::new("."));
+        let file_name = destination
+            .file_name()
+            .ok_or_else(|| anyhow!("output path has no filename: {}", destination.display()))?;
+        let counter = TEMPORARY_FILE_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let mut temporary_path = None;
+        let mut temporary_file = None;
+        for attempt in 0..100 {
+            let candidate = parent.join(format!(
+                ".{}.automerge-{}-{}.tmp",
+                file_name.to_string_lossy(),
+                std::process::id(),
+                counter + attempt
+            ));
+            let mut options = OpenOptions::new();
+            options.write(true).create_new(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                options.mode(0o600);
+            }
+            match options.open(&candidate) {
+                Ok(file) => {
+                    temporary_path = Some(candidate);
+                    temporary_file = Some(file);
+                    break;
+                }
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+                Err(error) => return Err(error.into()),
+            }
+        }
+        let temporary_path = temporary_path.ok_or_else(|| {
+            anyhow!(
+                "could not create a unique temporary output file next to {}",
+                destination.display()
+            )
+        })?;
+        let temporary_file = temporary_file.expect("temporary path and file are created together");
+
+        Ok(Self {
+            destination,
+            temporary: Some((temporary_path, temporary_file)),
+            permissions,
+        })
+    }
+
+    fn finish(mut self) -> Result<()> {
+        let (temporary_path, mut temporary_file) = self
+            .temporary
+            .take()
+            .expect("atomic output can only be finished once");
+        let result = (|| {
+            temporary_file.flush()?;
+            drop(temporary_file);
+            if let Some(permissions) = self.permissions.take() {
+                std::fs::set_permissions(&temporary_path, permissions)?;
+            }
+            replace_file(&temporary_path, &self.destination)
+        })();
+        if let Err(error) = result {
+            let _ = std::fs::remove_file(&temporary_path);
+            return Err(anyhow!(
+                "failed to replace {}: {error}",
+                self.destination.display()
+            ));
+        }
+        Ok(())
+    }
+}
+
+fn validate_output_destination(destination: &Path) -> Result<Option<std::fs::Permissions>> {
+    match std::fs::symlink_metadata(destination) {
+        Ok(metadata) => {
+            if metadata.file_type().is_symlink() {
+                return Err(anyhow!(
+                    "refusing atomic output through a symlink: {}",
+                    destination.display()
+                ));
+            }
+            if !metadata.file_type().is_file() {
+                return Err(anyhow!(
+                    "atomic output requires a regular file: {}",
+                    destination.display()
+                ));
+            }
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::MetadataExt;
+                if metadata.nlink() > 1 {
+                    return Err(anyhow!(
+                        "refusing atomic output for a file with multiple hard links: {}",
+                        destination.display()
+                    ));
+                }
+            }
+            Ok(Some(metadata.permissions()))
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error.into()),
+    }
+}
+
+impl Write for AtomicOutput {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        self.temporary
+            .as_mut()
+            .expect("atomic output must be writable before finish")
+            .1
+            .write(bytes)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.temporary
+            .as_mut()
+            .expect("atomic output must be writable before finish")
+            .1
+            .flush()
+    }
+}
+
+impl Drop for AtomicOutput {
+    fn drop(&mut self) {
+        if let Some((temporary_path, temporary_file)) = self.temporary.take() {
+            drop(temporary_file);
+            let _ = std::fs::remove_file(temporary_path);
+        }
+    }
+}
+
+#[cfg(not(windows))]
+fn replace_file(temporary: &Path, destination: &Path) -> io::Result<()> {
+    std::fs::rename(temporary, destination)
+}
+
+#[cfg(windows)]
+fn replace_file(temporary: &Path, destination: &Path) -> io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::{MoveFileExW, MOVEFILE_REPLACE_EXISTING};
+
+    let temporary: Vec<u16> = temporary.as_os_str().encode_wide().chain(Some(0)).collect();
+    let destination: Vec<u16> = destination
+        .as_os_str()
+        .encode_wide()
+        .chain(Some(0))
+        .collect();
+    let replaced = unsafe {
+        MoveFileExW(
+            temporary.as_ptr(),
+            destination.as_ptr(),
+            MOVEFILE_REPLACE_EXISTING,
+        )
+    };
+    if replaced == 0 {
+        Err(io::Error::last_os_error())
     } else {
-        Ok(Box::new(std::io::stdout()))
+        Ok(())
+    }
+}
+
+enum CliOutput {
+    File(AtomicOutput),
+    Stdout(std::io::Stdout),
+}
+
+impl CliOutput {
+    fn finish(mut self) -> Result<()> {
+        self.flush()?;
+        match self {
+            Self::File(output) => output.finish(),
+            Self::Stdout(_) => Ok(()),
+        }
+    }
+}
+
+impl Write for CliOutput {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        match self {
+            Self::File(output) => output.write(bytes),
+            Self::Stdout(output) => output.write(bytes),
+        }
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        match self {
+            Self::File(output) => output.flush(),
+            Self::Stdout(output) => output.flush(),
+        }
+    }
+}
+
+fn create_file_or_stdout(maybe_path: Option<PathBuf>) -> Result<CliOutput> {
+    if let Some(path) = maybe_path {
+        Ok(CliOutput::File(AtomicOutput::new(path)?))
+    } else if std::io::stdout().is_terminal() {
+        Err(anyhow!("Provide a file path or pipe output to stdout"))
+    } else {
+        Ok(CliOutput::Stdout(std::io::stdout()))
     }
 }
 
 fn write_file_if_changed(path: &Path, bytes: &[u8]) -> Result<()> {
+    validate_output_destination(path)?;
     match std::fs::read(path) {
         Ok(existing) if existing == bytes => return Ok(()),
         Ok(_) => {}
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(error) => return Err(error.into()),
     }
-    std::fs::write(path, bytes)?;
-    Ok(())
+    let mut output = AtomicOutput::new(path.to_path_buf())?;
+    output.write_all(bytes)?;
+    output.finish()
 }
 
 fn write_output(output_file: Option<PathBuf>, bytes: &[u8]) -> Result<()> {
@@ -196,7 +399,7 @@ fn write_output(output_file: Option<PathBuf>, bytes: &[u8]) -> Result<()> {
     } else {
         let mut output = create_file_or_stdout(None)?;
         output.write_all(bytes)?;
-        Ok(())
+        output.finish()
     }
 }
 
@@ -250,20 +453,17 @@ fn main() -> Result<()> {
             skip_verifying_heads,
         } => {
             ensure_paths_differ(changes_file.as_deref(), output_file.as_deref())?;
-            let output: Box<dyn std::io::Write> = if let Some(output_file) = output_file {
-                Box::new(File::create(output_file)?)
-            } else {
-                Box::new(std::io::stdout())
-            };
+            let mut output = create_file_or_stdout(output_file)?;
             match format {
                 ExportFormat::Json => {
                     let mut in_buffer = open_file_or_stdin(changes_file)?;
                     export::export_json(
                         &mut in_buffer,
-                        output,
+                        &mut output,
                         skip_verifying_heads,
                         std::io::stdout().is_terminal(),
-                    )
+                    )?;
+                    output.finish()
                 }
                 ExportFormat::Toml => unimplemented!(),
             }
@@ -277,7 +477,8 @@ fn main() -> Result<()> {
                 ensure_paths_differ(input_file.as_deref(), changes_file.as_deref())?;
                 let mut out_buffer = create_file_or_stdout(changes_file)?;
                 let mut in_buffer = open_file_or_stdin(input_file)?;
-                import::import_json(&mut in_buffer, &mut out_buffer)
+                import::import_json(&mut in_buffer, &mut out_buffer)?;
+                out_buffer.finish()
             }
             ExportFormat::Toml => unimplemented!(),
         },
@@ -324,7 +525,7 @@ fn main() -> Result<()> {
             let anonymized = anonymize::anonymize(input)?;
             let mut output = create_file_or_stdout(output_file)?;
             output.write_all(&anonymized.bytes)?;
-            output.flush()?;
+            output.finish()?;
             eprintln!(
                 "anonymized {} change(s), {} operation(s), and {} actor(s)",
                 anonymized.change_count, anonymized.operation_count, anonymized.actor_count
@@ -349,5 +550,28 @@ fn main() -> Result<()> {
             write_output(output_file, &bytes)?;
             Ok(())
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dropping_an_atomic_output_removes_its_temporary_file() {
+        let base = std::env::temp_dir().join(format!(
+            "automerge-cli-atomic-drop-{}-{}",
+            std::process::id(),
+            TEMPORARY_FILE_COUNTER.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::create_dir(&base).unwrap();
+        let destination = base.join("output.automerge");
+        {
+            let mut output = AtomicOutput::new(destination).unwrap();
+            output.write_all(b"uncommitted").unwrap();
+            assert_eq!(std::fs::read_dir(&base).unwrap().count(), 1);
+        }
+        assert_eq!(std::fs::read_dir(&base).unwrap().count(), 0);
+        std::fs::remove_dir(&base).unwrap();
     }
 }

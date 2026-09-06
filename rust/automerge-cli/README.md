@@ -22,3 +22,8 @@ automerge-cli copy input.automerge --out output.automerge
 
 Input and output can instead be piped through stdin and stdout. Unlike `merge`, this command does
 not compact or normalize the document.
+
+File outputs are staged in the destination directory and atomically replaced only after success, so
+readers never observe a partially written regular file. Existing permissions are preserved; symlinks
+and files with multiple hard links are rejected. This protects visibility and failure safety but does
+not promise power-loss durability.
