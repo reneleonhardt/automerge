@@ -18,6 +18,7 @@ mod copy;
 mod examine;
 mod examine_sync;
 mod export;
+mod history;
 mod import;
 mod merge;
 
@@ -153,6 +154,35 @@ enum Command {
         input_file: Option<PathBuf>,
 
         /// The file to write to. If omitted, writes to stdout.
+        #[clap(long("out"), short('o'))]
+        output_file: Option<PathBuf>,
+    },
+
+    /// Print the document's current change heads as JSON.
+    Heads { input_file: Option<PathBuf> },
+
+    /// Print changes present in the second document but not the first as JSON.
+    Diff {
+        before_file: PathBuf,
+        after_file: PathBuf,
+    },
+
+    /// Extract appendable changes from a base document to a target document.
+    Extract {
+        base_file: PathBuf,
+        target_file: PathBuf,
+
+        /// The file to write change chunks to. If omitted, writes to stdout.
+        #[clap(long("out"), short('o'))]
+        output_file: Option<PathBuf>,
+    },
+
+    /// Apply appendable change chunks to a base document.
+    Apply {
+        base_file: PathBuf,
+        incremental_file: PathBuf,
+
+        /// The file to write the resulting document to. If omitted, writes to stdout.
         #[clap(long("out"), short('o'))]
         output_file: Option<PathBuf>,
     },
@@ -549,6 +579,31 @@ fn main() -> Result<()> {
             let bytes = copy::copy(input_file)?;
             write_output(output_file, &bytes)?;
             Ok(())
+        }
+        Command::Heads { input_file } => history::print_heads(input_file),
+        Command::Diff {
+            before_file,
+            after_file,
+        } => history::print_diff(&before_file, &after_file),
+        Command::Extract {
+            base_file,
+            target_file,
+            output_file,
+        } => {
+            ensure_paths_differ(Some(&base_file), output_file.as_deref())?;
+            ensure_paths_differ(Some(&target_file), output_file.as_deref())?;
+            let bytes = history::extract(&base_file, &target_file)?;
+            write_output(output_file, &bytes)
+        }
+        Command::Apply {
+            base_file,
+            incremental_file,
+            output_file,
+        } => {
+            ensure_paths_differ(Some(&base_file), output_file.as_deref())?;
+            ensure_paths_differ(Some(&incremental_file), output_file.as_deref())?;
+            let bytes = history::apply(&base_file, &incremental_file)?;
+            write_output(output_file, &bytes)
         }
     }
 }

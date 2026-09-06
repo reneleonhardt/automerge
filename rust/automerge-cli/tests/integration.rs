@@ -1,6 +1,21 @@
-use std::env;
+use std::{
+    env,
+    path::PathBuf,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 use duct::cmd;
+
+fn unique_temp_dir(name: &str) -> PathBuf {
+    env::temp_dir().join(format!(
+        "automerge-cli-{name}-{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ))
+}
 
 // #[test]
 // fn import_stdin() {
@@ -567,6 +582,84 @@ fn copy_accepts_empty_stdin_without_diagnostics() {
         .unwrap();
     assert!(output.stdout.is_empty());
     assert!(output.stderr.is_empty());
+}
+
+#[test]
+fn heads_prints_change_hashes() {
+    use automerge::transaction::Transactable;
+    use automerge::{AutoCommit, ROOT};
+
+    let bin = env!("CARGO_BIN_EXE_automerge");
+    let base = unique_temp_dir("heads");
+    std::fs::create_dir(&base).unwrap();
+    let document_path = base.join("document.automerge");
+
+    let mut document = AutoCommit::new();
+    document.put(ROOT, "key", "value").unwrap();
+    std::fs::write(&document_path, document.save()).unwrap();
+
+    let heads: Vec<String> = cmd!(bin, "heads", &document_path)
+        .read()
+        .map(|output| serde_json::from_str(&output).unwrap())
+        .unwrap();
+    assert_eq!(heads.len(), 1);
+    assert_eq!(heads[0].len(), 64);
+
+    std::fs::remove_dir_all(base).unwrap();
+}
+
+#[test]
+fn diff_extract_and_apply_round_trip() {
+    use automerge::transaction::Transactable;
+    use automerge::{AutoCommit, Automerge, ReadDoc, ROOT};
+
+    let bin = env!("CARGO_BIN_EXE_automerge");
+    let base = unique_temp_dir("incremental");
+    std::fs::create_dir(&base).unwrap();
+    let base_path = base.join("base.automerge");
+    let target_path = base.join("target.automerge");
+    let changes_path = base.join("update.changes");
+    let result_path = base.join("result.automerge");
+
+    let mut document = AutoCommit::new();
+    document.put(ROOT, "key", "value").unwrap();
+    std::fs::write(&base_path, document.save()).unwrap();
+    document.put(ROOT, "key", "updated").unwrap();
+    std::fs::write(&target_path, document.save()).unwrap();
+
+    let diff = cmd!(bin, "diff", &base_path, &target_path).read().unwrap();
+    let changes: Vec<serde_json::Value> = serde_json::from_str(&diff).unwrap();
+    assert_eq!(changes.len(), 1);
+
+    cmd!(
+        bin,
+        "extract",
+        &base_path,
+        &target_path,
+        "--out",
+        &changes_path
+    )
+    .run()
+    .unwrap();
+    assert!(!std::fs::read(&changes_path).unwrap().is_empty());
+    cmd!(
+        bin,
+        "apply",
+        &base_path,
+        &changes_path,
+        "--out",
+        &result_path
+    )
+    .run()
+    .unwrap();
+
+    let result = Automerge::load(&std::fs::read(&result_path).unwrap()).unwrap();
+    assert_eq!(
+        result.get(ROOT, "key").unwrap().unwrap().0,
+        automerge::Value::from("updated")
+    );
+
+    std::fs::remove_dir_all(base).unwrap();
 }
 
 /*

@@ -27,3 +27,24 @@ File outputs are staged in the destination directory and atomically replaced onl
 readers never observe a partially written regular file. Existing permissions are preserved; symlinks
 and files with multiple hard links are rejected. This protects visibility and failure safety but does
 not promise power-loss durability.
+
+## Inspect and transfer changes
+
+`heads` prints a document's current change heads, and `diff` prints the changes present in the second
+document but not the first:
+
+```sh
+automerge-cli heads document.automerge
+automerge-cli diff base.automerge updated.automerge
+```
+
+`extract` writes the appendable changes after a base document's heads. `apply` applies those chunks
+to the same base document and writes a complete document:
+
+```sh
+automerge-cli extract base.automerge updated.automerge --out update.changes
+automerge-cli apply base.automerge update.changes --out result.automerge
+```
+
+The two-document commands require file paths; their output can be sent to stdout when `--out` is
+omitted.
