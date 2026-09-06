@@ -12,6 +12,29 @@ describe("Automerge", () => {
       assert.deepEqual(Automerge.load(uncompressed), doc)
     })
 
+    it("should write a save into a caller-owned buffer", () => {
+      const doc = Automerge.from({ value: "x".repeat(1000) })
+      const expected = Automerge.save(doc)
+      const output = new Uint8Array(expected.length + 3).fill(0xa5)
+
+      const written = Automerge.saveInto(doc, output)
+
+      assert.equal(written, expected.length)
+      assert.deepEqual(output.slice(0, written), expected)
+      assert.deepEqual(output.slice(written), new Uint8Array([0xa5, 0xa5, 0xa5]))
+      const undersized = new Uint8Array(expected.length - 1).fill(0x5a)
+      assert.throws(() => Automerge.saveInto(doc, undersized), /output buffer/)
+      assert.deepEqual(undersized, new Uint8Array(expected.length - 1).fill(0x5a))
+
+      const changed = Automerge.change(doc, d => {
+        d.value = "y".repeat(1000)
+      })
+      const changedExpected = Automerge.save(changed)
+      const changedOutput = new Uint8Array(changedExpected.length)
+      assert.equal(Automerge.saveInto(changed, changedOutput), changedExpected.length)
+      assert.deepEqual(changedOutput, changedExpected)
+    })
+
     it("should allow you to load incrementally", () => {
       let doc1 = Automerge.from<any>({ foo: "bar" })
       let doc2 = Automerge.init<any>()

@@ -552,8 +552,13 @@ impl AutoCommit {
     ///
     /// The returned value is the number of bytes written.
     pub fn save_to<W: std::io::Write>(&mut self, writer: &mut W) -> std::io::Result<usize> {
+        let save_cursor = std::mem::take(&mut self.save_cursor);
         let bytes = self.save_cached();
-        writer.write_all(&bytes)?;
+        let result = writer.write_all(&bytes);
+        if result.is_err() || bytes.is_empty() {
+            self.save_cursor = save_cursor;
+        }
+        result?;
         Ok(bytes.len())
     }
 
@@ -1430,6 +1435,7 @@ mod tests {
     use super::AutoCommit;
     use crate::transaction::Transactable;
     use crate::{ActorId, ROOT};
+    use std::io::{self, Write};
 
     fn is_send<S: Send>() {}
 
@@ -1471,5 +1477,69 @@ mod tests {
         assert_eq!(written, output.len());
         assert_eq!(output, expected);
         assert!(doc.save_incremental().is_empty());
+    }
+
+    struct FailingWriter {
+        bytes: Vec<u8>,
+        limit: usize,
+    }
+
+    impl Write for FailingWriter {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            if self.bytes.len() >= self.limit {
+                return Err(io::Error::other("test writer failure"));
+            }
+            let written = (self.limit - self.bytes.len()).min(bytes.len());
+            self.bytes.extend_from_slice(&bytes[..written]);
+            Ok(written)
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn incremental_writer_keeps_cursor_after_write_error() {
+        let actor = ActorId::from("writer-error-test".as_bytes());
+        let mut doc = AutoCommit::new().with_actor(actor.clone());
+        doc.put(ROOT, "key", "value").unwrap();
+        let _ = doc.save_incremental();
+        doc.put(ROOT, "key", "updated").unwrap();
+
+        let mut expected_doc = AutoCommit::new().with_actor(actor);
+        expected_doc.put(ROOT, "key", "value").unwrap();
+        let _ = expected_doc.save_incremental();
+        expected_doc.put(ROOT, "key", "updated").unwrap();
+        let expected = expected_doc.save_incremental();
+
+        let mut writer = FailingWriter {
+            bytes: Vec::new(),
+            limit: expected.len() - 1,
+        };
+        assert!(doc.save_incremental_to(&mut writer).is_err());
+        assert_eq!(doc.save_incremental(), expected);
+    }
+
+    #[test]
+    fn cached_writer_keeps_cursor_after_write_error() {
+        let actor = ActorId::from("cached-writer-error-test".as_bytes());
+        let mut doc = AutoCommit::new().with_actor(actor.clone());
+        doc.put(ROOT, "key", "value").unwrap();
+        let _ = doc.save();
+        doc.put(ROOT, "key", "updated").unwrap();
+
+        let mut expected_doc = AutoCommit::new().with_actor(actor);
+        expected_doc.put(ROOT, "key", "value").unwrap();
+        let _ = expected_doc.save();
+        expected_doc.put(ROOT, "key", "updated").unwrap();
+        let expected = expected_doc.save_incremental();
+
+        let mut writer = FailingWriter {
+            bytes: Vec::new(),
+            limit: 0,
+        };
+        assert!(doc.save_to(&mut writer).is_err());
+        assert_eq!(doc.save_incremental(), expected);
     }
 }

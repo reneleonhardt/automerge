@@ -863,6 +863,16 @@ export function saveNoCompress<T>(doc: Doc<T>): Uint8Array {
 }
 
 /**
+ * Write a default save into a caller-owned buffer and return the number of bytes written.
+ *
+ * The buffer must be large enough for the save. Reusing it avoids allocating a new JavaScript
+ * `Uint8Array` for each save.
+ */
+export function saveInto<T>(doc: Doc<T>, output: Uint8Array): number {
+  return _state(doc).handle.saveInto(output)
+}
+
+/**
  * Merge `remote` into `local`
  * @typeParam T - The type of values contained in each document
  * @param local - The document to merge changes into

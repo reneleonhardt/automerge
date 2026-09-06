@@ -41,6 +41,7 @@ use serde::ser::Serialize;
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::convert::TryInto;
+use std::io::{self, Write};
 use std::ops::{Bound, RangeBounds};
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
@@ -454,6 +455,32 @@ pub struct Automerge {
     doc: AutoCommit,
     freeze: bool,
     external_types: HashMap<Datatype, interop::ExternalTypeConstructor>,
+}
+
+struct Uint8ArrayWriter<'a> {
+    output: &'a Uint8Array,
+    offset: usize,
+}
+
+impl Write for Uint8ArrayWriter<'_> {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        let available = (self.output.length() as usize).saturating_sub(self.offset);
+        if bytes.len() > available {
+            return Err(io::Error::new(
+                io::ErrorKind::WriteZero,
+                "output buffer is too small",
+            ));
+        }
+        let start = self.offset as u32;
+        let end = (self.offset + bytes.len()) as u32;
+        self.output.subarray(start, end).copy_from(bytes);
+        self.offset += bytes.len();
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
 }
 
 #[wasm_bindgen]
@@ -1335,6 +1362,20 @@ impl Automerge {
     pub fn save_nocompress(&mut self) -> Uint8Array {
         let bytes = self.doc.save_nocompress();
         Uint8Array::from(bytes.as_slice())
+    }
+
+    /// Write the default save into a caller-owned JavaScript buffer.
+    ///
+    /// The buffer must be large enough; only the prefix containing the save is modified.
+    #[wasm_bindgen(js_name = saveInto)]
+    pub fn save_into(&mut self, output: &Uint8Array) -> Result<f64, error::SaveInto> {
+        let mut writer = Uint8ArrayWriter { output, offset: 0 };
+        self.doc
+            .save_to(&mut writer)
+            .map(|written| written as f64)
+            .map_err(|_| error::SaveInto {
+                available: output.length() as usize,
+            })
     }
 
     #[wasm_bindgen(js_name = saveAndVerify)]
@@ -2384,6 +2425,18 @@ pub mod error {
 
     impl From<ApplyChangesError> for JsValue {
         fn from(e: ApplyChangesError) -> Self {
+            RangeError::new(&e.to_string()).into()
+        }
+    }
+
+    #[derive(Debug, thiserror::Error)]
+    #[error("output buffer with {available} bytes is too small for this save")]
+    pub struct SaveInto {
+        pub(crate) available: usize,
+    }
+
+    impl From<SaveInto> for JsValue {
+        fn from(e: SaveInto) -> Self {
             RangeError::new(&e.to_string()).into()
         }
     }
