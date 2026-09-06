@@ -48,3 +48,10 @@ automerge-cli apply base.automerge update.changes --out result.automerge
 
 The two-document commands require file paths; their output can be sent to stdout when `--out` is
 omitted.
+
+`import` and `export` support JSON and TOML with `--format`. TOML datetimes are imported as strings;
+JSON null values cannot be represented by TOML and are rejected on export.
+
+`changes` prints change metadata as JSON. Use `--after HASH` for changes not reachable from a base
+change, `--hash HASH` for one change, and `--limit N` to cap the result. `verify` validates a document;
+`verify --json` emits a machine-readable success or failure report and exits nonzero for invalid input.

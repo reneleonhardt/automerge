@@ -186,6 +186,32 @@ enum Command {
         #[clap(long("out"), short('o'))]
         output_file: Option<PathBuf>,
     },
+
+    /// Print selected change metadata as JSON.
+    Changes {
+        input_file: Option<PathBuf>,
+
+        /// Select changes after this change and its dependencies.
+        #[clap(long, conflicts_with = "hash")]
+        after: Option<automerge::ChangeHash>,
+
+        /// Select one change by its hash.
+        #[clap(long, conflicts_with = "after")]
+        hash: Option<automerge::ChangeHash>,
+
+        /// Limit the number of metadata entries returned.
+        #[clap(long)]
+        limit: Option<usize>,
+    },
+
+    /// Validate an Automerge document and report its summary.
+    Verify {
+        input_file: Option<PathBuf>,
+
+        /// Emit a machine-readable JSON report.
+        #[clap(long)]
+        json: bool,
+    },
 }
 
 fn open_file_or_stdin(maybe_path: Option<PathBuf>) -> Result<Box<dyn std::io::Read>> {
@@ -495,7 +521,11 @@ fn main() -> Result<()> {
                     )?;
                     output.finish()
                 }
-                ExportFormat::Toml => unimplemented!(),
+                ExportFormat::Toml => {
+                    let mut in_buffer = open_file_or_stdin(changes_file)?;
+                    export::export_toml(&mut in_buffer, &mut output, skip_verifying_heads)?;
+                    output.finish()
+                }
             }
         }
         Command::Import {
@@ -510,7 +540,13 @@ fn main() -> Result<()> {
                 import::import_json(&mut in_buffer, &mut out_buffer)?;
                 out_buffer.finish()
             }
-            ExportFormat::Toml => unimplemented!(),
+            ExportFormat::Toml => {
+                ensure_paths_differ(input_file.as_deref(), changes_file.as_deref())?;
+                let mut out_buffer = create_file_or_stdout(changes_file)?;
+                let mut in_buffer = open_file_or_stdin(input_file)?;
+                import::import_toml(&mut in_buffer, &mut out_buffer)?;
+                out_buffer.finish()
+            }
         },
         Command::Examine {
             input_file,
@@ -566,10 +602,8 @@ fn main() -> Result<()> {
             Ok(())
         }
         Command::Merge { input, output_file } => {
-            match merge::merge(input.into()) {
-                Ok(merged) => write_output(output_file, &merged)?,
-                Err(e) => return Err(e.into()),
-            }
+            let merged = merge::merge(input.into())?;
+            write_output(output_file, &merged)?;
             Ok(())
         }
         Command::Copy {
@@ -605,6 +639,13 @@ fn main() -> Result<()> {
             let bytes = history::apply(&base_file, &incremental_file)?;
             write_output(output_file, &bytes)
         }
+        Command::Changes {
+            input_file,
+            after,
+            hash,
+            limit,
+        } => history::print_changes(input_file, after, hash, limit),
+        Command::Verify { input_file, json } => history::verify(input_file, json),
     }
 }
 

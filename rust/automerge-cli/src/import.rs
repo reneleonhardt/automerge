@@ -106,3 +106,41 @@ pub fn import_json(
     writer.write_all(&doc.save())?;
     Ok(())
 }
+
+fn toml_to_json(value: toml::Value) -> anyhow::Result<serde_json::Value> {
+    Ok(match value {
+        toml::Value::Array(values) => serde_json::Value::Array(
+            values
+                .into_iter()
+                .map(toml_to_json)
+                .collect::<anyhow::Result<_>>()?,
+        ),
+        toml::Value::Boolean(value) => serde_json::Value::Bool(value),
+        toml::Value::Datetime(value) => serde_json::Value::String(value.to_string()),
+        toml::Value::Float(value) => serde_json::Number::from_f64(value)
+            .map(serde_json::Value::Number)
+            .ok_or_else(|| anyhow::anyhow!("TOML float is not a JSON number: {value}"))?,
+        toml::Value::Integer(value) => serde_json::Value::Number(value.into()),
+        toml::Value::String(value) => serde_json::Value::String(value),
+        toml::Value::Table(table) => serde_json::Value::Object(
+            table
+                .into_iter()
+                .map(|(key, value)| Ok((key, toml_to_json(value)?)))
+                .collect::<anyhow::Result<_>>()?,
+        ),
+    })
+}
+
+pub fn import_toml(
+    mut reader: impl std::io::Read,
+    mut writer: impl std::io::Write,
+) -> anyhow::Result<()> {
+    let mut buffer = String::new();
+    reader.read_to_string(&mut buffer)?;
+
+    let toml_value: toml::Value = toml::from_str(&buffer)?;
+    let json_value = toml_to_json(toml_value)?;
+    let mut doc = initialize_from_json(&json_value)?;
+    writer.write_all(&doc.save())?;
+    Ok(())
+}

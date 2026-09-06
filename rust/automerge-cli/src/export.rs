@@ -4,7 +4,7 @@ use automerge as am;
 use crate::{color_json::print_colored_json, VerifyFlag};
 
 fn get_state_json(input_data: Vec<u8>, skip: VerifyFlag) -> Result<serde_json::Value> {
-    let doc = skip.load(&input_data).unwrap(); // FIXME
+    let doc = skip.load(&input_data)?;
     serde_json::to_value(am::AutoSerde::from(&doc)).map_err(Into::into)
 }
 
@@ -28,6 +28,21 @@ pub(crate) fn export_json(
             serde_json::to_string_pretty(&state_json).unwrap()
         )?;
     }
+    Ok(())
+}
+
+pub(crate) fn export_toml(
+    mut changes_reader: impl std::io::Read,
+    mut writer: impl std::io::Write,
+    skip: VerifyFlag,
+) -> Result<()> {
+    let mut input_data = vec![];
+    changes_reader.read_to_end(&mut input_data)?;
+
+    let state_json = get_state_json(input_data, skip)?;
+    let state_toml = toml::to_string_pretty(&state_json)
+        .map_err(|error| anyhow::anyhow!("cannot represent document state as TOML: {error}"))?;
+    writer.write_all(state_toml.as_bytes())?;
     Ok(())
 }
 

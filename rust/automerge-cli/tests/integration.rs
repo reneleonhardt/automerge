@@ -77,6 +77,72 @@ fn import_export_isomorphic() {
 }
 
 #[test]
+fn import_export_toml_isomorphic() {
+    let bin = env!("CARGO_BIN_EXE_automerge");
+    let toml_input = r#"
+[birds]
+wrens = 3
+sparrows = 15
+
+[[birds.nests]]
+location = "oak"
+"#;
+
+    let json_output = cmd!(bin, "import", "--format", "toml")
+        .stdin_bytes(toml_input)
+        .pipe(cmd!(bin, "export"))
+        .read()
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_str(&json_output).unwrap();
+    assert_eq!(
+        json,
+        serde_json::json!({
+            "birds": {
+                "wrens": 3,
+                "sparrows": 15,
+                "nests": [{"location": "oak"}]
+            }
+        })
+    );
+
+    let toml_output = cmd!(bin, "import")
+        .stdin_bytes(serde_json::to_vec(&json).unwrap())
+        .pipe(cmd!(bin, "export", "--format", "toml"))
+        .read()
+        .unwrap();
+    let round_trip: toml::Value = toml::from_str(&toml_output).unwrap();
+    assert_eq!(round_trip["birds"]["wrens"].as_integer(), Some(3));
+    assert_eq!(
+        round_trip["birds"]["nests"][0]["location"].as_str(),
+        Some("oak")
+    );
+}
+
+#[test]
+fn toml_rejects_malformed_input_and_unrepresentable_null_output() {
+    let bin = env!("CARGO_BIN_EXE_automerge");
+
+    let malformed = cmd!(bin, "import", "--format", "toml")
+        .stdin_bytes("[birds\n")
+        .stderr_capture()
+        .unchecked()
+        .run()
+        .unwrap();
+    assert!(!malformed.status.success());
+    assert!(!malformed.stderr.is_empty());
+
+    let null_value = cmd!(bin, "import")
+        .stdin_bytes(r#"{"value":null}"#)
+        .pipe(cmd!(bin, "export", "--format", "toml"))
+        .stderr_capture()
+        .unchecked()
+        .run()
+        .unwrap();
+    assert!(!null_value.status.success());
+    assert!(String::from_utf8_lossy(&null_value.stderr).contains("cannot represent"));
+}
+
+#[test]
 fn import_and_export_reject_same_path_without_truncating_input() {
     use automerge::transaction::Transactable;
     use automerge::{AutoCommit, ROOT};
@@ -658,6 +724,95 @@ fn diff_extract_and_apply_round_trip() {
         result.get(ROOT, "key").unwrap().unwrap().0,
         automerge::Value::from("updated")
     );
+
+    std::fs::remove_dir_all(base).unwrap();
+}
+
+#[test]
+fn changes_selects_metadata_by_hash_after_and_limit() {
+    use automerge::transaction::Transactable;
+    use automerge::{AutoCommit, ROOT};
+
+    let bin = env!("CARGO_BIN_EXE_automerge");
+    let base = unique_temp_dir("changes");
+    std::fs::create_dir(&base).unwrap();
+    let document_path = base.join("document.automerge");
+
+    let mut document = AutoCommit::new();
+    document.put(ROOT, "first", 1).unwrap();
+    document.commit();
+    let first = document.get_changes_meta(&[])[0].hash.to_string();
+    document.put(ROOT, "second", 2).unwrap();
+    document.commit();
+    document.put(ROOT, "third", 3).unwrap();
+    document.commit();
+    let all_hashes = document
+        .get_changes_meta(&[])
+        .into_iter()
+        .map(|change| change.hash.to_string())
+        .collect::<Vec<_>>();
+    std::fs::write(&document_path, document.save()).unwrap();
+
+    let after_output = cmd!(
+        bin,
+        "changes",
+        &document_path,
+        "--after",
+        &first,
+        "--limit",
+        "1"
+    )
+    .read()
+    .unwrap();
+    let after: Vec<serde_json::Value> = serde_json::from_str(&after_output).unwrap();
+    assert_eq!(after.len(), 1);
+    assert_eq!(after[0]["hash"], all_hashes[1]);
+    assert_eq!(after[0]["operation_count"], 1);
+    assert!(after[0]["actor"].as_str().is_some());
+
+    let hash = all_hashes[2].clone();
+    let hash_output = cmd!(bin, "changes", &document_path, "--hash", &hash)
+        .read()
+        .unwrap();
+    let selected: Vec<serde_json::Value> = serde_json::from_str(&hash_output).unwrap();
+    assert_eq!(selected.len(), 1);
+    assert_eq!(selected[0]["hash"], hash);
+
+    std::fs::remove_dir_all(base).unwrap();
+}
+
+#[test]
+fn verify_json_reports_valid_and_invalid_documents() {
+    use automerge::transaction::Transactable;
+    use automerge::{AutoCommit, ROOT};
+
+    let bin = env!("CARGO_BIN_EXE_automerge");
+    let base = unique_temp_dir("verify");
+    std::fs::create_dir(&base).unwrap();
+    let valid_path = base.join("valid.automerge");
+    let invalid_path = base.join("invalid.automerge");
+
+    let mut document = AutoCommit::new();
+    document.put(ROOT, "key", "value").unwrap();
+    std::fs::write(&valid_path, document.save()).unwrap();
+    std::fs::write(&invalid_path, b"not an automerge document").unwrap();
+
+    let valid_output = cmd!(bin, "verify", "--json", &valid_path).read().unwrap();
+    let valid: serde_json::Value = serde_json::from_str(&valid_output).unwrap();
+    assert_eq!(valid["valid"], true);
+    assert_eq!(valid["change_count"], 1);
+    assert_eq!(valid["actor_count"], 1);
+
+    let invalid = cmd!(bin, "verify", "--json", &invalid_path)
+        .stdout_capture()
+        .stderr_capture()
+        .unchecked()
+        .run()
+        .unwrap();
+    assert!(!invalid.status.success());
+    let invalid_json: serde_json::Value = serde_json::from_slice(&invalid.stdout).unwrap();
+    assert_eq!(invalid_json["valid"], false);
+    assert!(invalid_json["error"].as_str().is_some());
 
     std::fs::remove_dir_all(base).unwrap();
 }
