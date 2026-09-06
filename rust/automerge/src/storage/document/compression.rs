@@ -243,7 +243,7 @@ struct Finished<D: Direction> {
 
 impl<'a, D: Direction> Compression<'a, D, Starting> {
     fn new(args: Args<'a, D::In, D::Args>, direction: D) -> Compression<'a, D, Starting> {
-        let mut meta_out = Vec::with_capacity(args.original.len() * 2);
+        let mut meta_out = Vec::with_capacity(args.original.len());
         meta_out.extend(&args.original[..args.prefix]);
         Compression {
             args,
@@ -352,11 +352,60 @@ impl<'a> Compression<'a, Decompressing, Finished<Decompressing>> {
 impl Compression<'_, Compressing, Finished<Compressing>> {
     fn finish(self) -> Vec<u8> {
         let Finished { out, .. } = self.state;
-        let headerless = &out[self.direction.header_len..];
-        let header = Header::new(ChunkType::Document, headerless);
-        let mut result = Vec::with_capacity(header.len() + out.len());
+        finish_compressed(out, self.direction.header_len)
+    }
+}
+
+fn finish_compressed(mut out: Vec<u8>, original_header_len: usize) -> Vec<u8> {
+    let header = Header::new(ChunkType::Document, &out[original_header_len..]);
+    if header.len() == original_header_len {
+        let mut encoded_header = Vec::with_capacity(original_header_len);
+        header.write(&mut encoded_header);
+        out[..original_header_len].copy_from_slice(&encoded_header);
+        out
+    } else {
+        let headerless = &out[original_header_len..];
+        let mut result = Vec::with_capacity(header.len() + headerless.len());
         header.write(&mut result);
         result.extend(headerless);
         result
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::finish_compressed;
+    use crate::storage::{ChunkType, Header};
+
+    fn document_bytes(payload: &[u8]) -> Vec<u8> {
+        let header = Header::new(ChunkType::Document, payload);
+        let mut bytes = Vec::with_capacity(header.len() + payload.len());
+        header.write(&mut bytes);
+        bytes.extend(payload);
+        bytes
+    }
+
+    #[test]
+    fn compressed_finish_reuses_buffer_when_header_width_is_unchanged() {
+        let payload = b"compressed payload";
+        let bytes = document_bytes(payload);
+        let header_len = Header::new(ChunkType::Document, payload).len();
+
+        assert_eq!(
+            finish_compressed(bytes, header_len),
+            document_bytes(payload)
+        );
+    }
+
+    #[test]
+    fn compressed_finish_rebuilds_buffer_when_header_width_changes() {
+        let original_payload = vec![0; 16_384];
+        let bytes = document_bytes(&original_payload);
+        let original_header_len = Header::new(ChunkType::Document, &original_payload).len();
+        let expected = document_bytes(&original_payload[..5]);
+
+        let mut input = bytes;
+        input.truncate(original_header_len + 5);
+        assert_eq!(finish_compressed(input, original_header_len), expected);
     }
 }
