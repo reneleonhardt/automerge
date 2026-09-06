@@ -853,6 +853,16 @@ export function save<T>(doc: Doc<T>): Uint8Array {
 }
 
 /**
+ * Export a document without per-column DEFLATE compression.
+ *
+ * The returned bytes can be passed to {@link load} or {@link loadIncremental}.
+ * This is useful when CPU cost matters more than the larger output.
+ */
+export function saveNoCompress<T>(doc: Doc<T>): Uint8Array {
+  return _state(doc).handle.saveNoCompress()
+}
+
+/**
  * Merge `remote` into `local`
  * @typeParam T - The type of values contained in each document
  * @param local - The document to merge changes into
