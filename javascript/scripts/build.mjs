@@ -401,6 +401,7 @@ async function transpileCjs() {
     target: "node14",
     platform: "node",
     outExtension: { ".js": ".cjs" },
+    logOverride: { "empty-import-meta": "silent" },
   })
 
   const iifeDir = path.join(distDir, "iife")
@@ -411,6 +412,7 @@ async function transpileCjs() {
     bundle: true,
     format: "iife",
     target: "es2020",
+    logOverride: { "empty-import-meta": "silent" },
   })
 
   console.log("building bundler CommonJS modules")
@@ -424,6 +426,7 @@ async function transpileCjs() {
     target: "es2020",
     platform: "node",
     outExtension: { ".js": ".cjs" },
+    logOverride: { "empty-import-meta": "silent" },
   })
 }
 
