@@ -468,7 +468,7 @@ is only used for this wasm build. Environments without rustup can set
 `WASM_CARGO` to a Cargo executable that already selects the required nightly;
 the repository's Nix flake uses this mechanism.
 
-Optional zstd transport helpers can be included in a package build with
+Build optional zstd transport helpers with
 `npm run build:zstd` or `npm run release:zstd`. They expose
 `compressZstd(data, level?)` and `decompressZstd(data, maxOutputSize)` for
 transport or archive envelopes. Decompress the result before passing it to

@@ -1366,7 +1366,7 @@ impl Automerge {
 
     /// Write the default save into a caller-owned JavaScript buffer.
     ///
-    /// The buffer must be large enough; only the prefix containing the save is modified.
+    /// The buffer must be large enough; only the prefix that contains the save is modified.
     #[wasm_bindgen(js_name = saveInto)]
     pub fn save_into(&mut self, output: &Uint8Array) -> Result<f64, error::SaveInto> {
         let mut writer = Uint8ArrayWriter { output, offset: 0 };

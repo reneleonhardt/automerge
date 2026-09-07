@@ -422,7 +422,7 @@ pub struct Automerge {
     authors: Authors,
     /// Current dependencies of this document (heads hashes).
     deps: HashSet<ChangeHash>,
-    /// Sorted heads, built lazily for read-only paths such as sync polling.
+    /// Heads are sorted lazily for read-only paths such as sync polling.
     heads_cache: OnceLock<Vec<ChangeHash>>,
     /// The set of operations that form this document.
     pub(crate) ops: OpSet,
@@ -430,7 +430,7 @@ pub struct Automerge {
     actor: Actor,
     /// The current author.
     author: Option<Author<'static>>,
-    /// Cached bytes for the common default save while the document is unchanged.
+    /// Caches the common default save while the document is unchanged.
     save_cache: OnceLock<Arc<[u8]>>,
 }
 

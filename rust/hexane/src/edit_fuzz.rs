@@ -16,8 +16,8 @@
 //!    should have merged, or a literal group whose header count is off by
 //!    one all fail here and nowhere else.
 //!
-//! The deep public-API fuzzing lives in `hexane/fuzz`, so the normal library
-//! test target stays focused on fast regression coverage.
+//! The deep public-API fuzz target is in the `hexane/fuzz` package, so the
+//! normal library test target stays focused on fast regression coverage.
 
 use crate::column::Column;
 use crate::{ColumnValueRef, Run};

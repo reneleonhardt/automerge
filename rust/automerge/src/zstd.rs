@@ -33,7 +33,7 @@ pub fn compress(input: &[u8], level: i32) -> Result<Vec<u8>, Error> {
 }
 
 /// Decompresses zstd frames without allowing the result to exceed `max_output_size`,
-/// while also applying an output-derived cap to decoder window allocation.
+/// and caps decoder-window allocation based on that limit.
 pub fn decompress(input: &[u8], max_output_size: usize) -> Result<Vec<u8>, Error> {
     const BUFFER_SIZE: usize = 16 * 1024;
 

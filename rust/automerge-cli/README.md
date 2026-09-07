@@ -46,10 +46,10 @@ automerge-cli extract base.automerge updated.automerge --out update.changes
 automerge-cli apply base.automerge update.changes --out result.automerge
 ```
 
-The two-document commands require file paths; their output can be sent to stdout when `--out` is
-omitted.
+The `diff`, `extract`, and `apply` commands require file paths for their inputs. `extract` and
+`apply` write to stdout when `--out` is omitted.
 
-`import` and `export` support JSON and TOML with `--format`. TOML datetimes are imported as strings;
+`import` and `export` support JSON and TOML with `--format`. TOML date-time values are imported as strings;
 JSON null values cannot be represented by TOML and are rejected on export.
 
 `changes` prints change metadata as JSON. Use `--after HASH` for changes not reachable from a base
