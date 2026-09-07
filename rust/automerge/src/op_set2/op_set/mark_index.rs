@@ -689,17 +689,13 @@ pub(crate) mod tests {
         open
     }
 
-    #[test]
-    #[ignore]
-    fn large_column_multi_slab() {
+    fn check_multi_slab_mark_index(n: usize, num_marks: usize) {
         use rand::{RngExt, SeedableRng};
         let mut rng = rand::rngs::SmallRng::seed_from_u64(42);
 
-        let n = 100_000;
         let mut values: Vec<Option<MarkIdx>> = vec![None; n];
         let mut cache_entries: Vec<(OpId, MarkData<'static>)> = Vec::new();
 
-        let num_marks = 2500;
         let mut mark_ids: Vec<(OpId, usize, usize)> = Vec::new();
 
         for i in 0..num_marks {
@@ -815,5 +811,16 @@ pub(crate) mod tests {
                 "mismatch at pos {pos} (after undo, col_len={new_len})"
             );
         }
+    }
+
+    #[test]
+    fn multi_slab_mark_index() {
+        check_multi_slab_mark_index(4096, 500);
+    }
+
+    #[test]
+    #[ignore = "white-box stress test; run explicitly when validating large mark indexes"]
+    fn multi_slab_mark_index_stress() {
+        check_multi_slab_mark_index(100_000, 2500);
     }
 }

@@ -2046,7 +2046,10 @@ where
 {
     /// Open a forward-only read/write cursor at the start of the column.
     ///
-    /// ```ignore
+    /// ```rust
+    /// # use hexane::leb128::Column;
+    /// # let mut col = Column::from_values(vec![0u64; 101]);
+    /// # let value = 1u64;
     /// col.edit()
     ///     .seek(10).delete(2).insert(value)
     ///     .seek(100).replace(|n| n + 1)

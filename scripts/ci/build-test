@@ -3,6 +3,7 @@ set -eoux pipefail
 
 pushd rust
 RUST_LOG=error cargo test -p automerge --features slow_path_assertions
+# cargo test -p automerge --lib multi_slab_mark_index_stress -- --ignored --nocapture
 RUST_LOG=error cargo test -p automerge-test
 RUST_LOG=error cargo test -p automerge-c
 RUST_LOG=error cargo test -p automerge-cli

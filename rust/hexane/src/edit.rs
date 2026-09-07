@@ -86,7 +86,11 @@ pub(crate) const RUN_BUDGET: usize = 8;
 
 /// A forward-only read/write cursor over a [`Column`].
 ///
-/// ```ignore
+/// ```rust
+/// # use hexane::{leb128::Column, Run};
+/// # let mut col = Column::from_values(vec![0u64; 101]);
+/// # let value = 1u64;
+/// # let runs = std::iter::once(Run { count: 1, value: 2u64 });
 /// let mut e = col.edit_at(0);
 /// e.seek(10).delete(5).insert(value).seek(100).insert_runs(runs);
 /// e.finish();
